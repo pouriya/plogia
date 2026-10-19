@@ -40,13 +40,16 @@ use tracing_subscriber::{filter::LevelFilter, fmt as subscriber};
 /// Greek capital pi, U+03A0.
 const CHANNEL_TITLE: &str = "Π";
 
-/// Under the avatar on the card at the very top of the channel, and the
-/// description of a link to the channel itself.
+/// In the channel info, and the description of a link to the channel itself.
 const CHANNEL_DESCRIPTION: &str = "گفته‌های پوریا";
 
-/// A path under `--www`: the avatar in the header and beside every post, and
-/// the link-preview image of any page that has no image of its own.
+/// A path under `--www`: the avatar in the header, beside every post and in
+/// the channel info. Link previews carry no image at all.
 const CHANNEL_AVATAR: &str = "/plogia.jpg";
+
+/// The zone of every post's `date`, which is written without one: the
+/// author's wall clock. Only used for `article:published_time`.
+const TIMEZONE: &str = "+03:30";
 
 /// Posts per `GET /api/posts`: the first screen, and every scroll-up after it.
 const PAGE_SIZE: usize = 20;
@@ -139,12 +142,12 @@ struct Post {
     date: String,
     html: String,
     views: u64,
-    /// Plain-text start of the post, for the link preview of `/p/<n>`.
+    /// First sentence, the title of the link preview of `/p/<n>`.
+    #[serde(skip)]
+    sentence: String,
+    /// Plain text after the first sentence, its description.
     #[serde(skip)]
     excerpt: String,
-    /// First image in the post, for the link preview of `/p/<n>`.
-    #[serde(skip)]
-    image: Option<String>,
 }
 
 /// 48 bits of Unix milliseconds then 80 random bits, big-endian, written as 26
@@ -381,7 +384,8 @@ async fn page(
     let mut status = StatusCode::OK;
     let mut title = CHANNEL_TITLE.to_string();
     let mut description = CHANNEL_DESCRIPTION.to_string();
-    let mut image = CHANNEL_AVATAR.to_string();
+    let mut kind = "website";
+    let mut published = String::new();
     let mut focus = String::new();
     let mut path = "/".to_string();
     if let Some(Path(id)) = post {
@@ -389,11 +393,15 @@ async fn page(
         let directory = app.posts.clone();
         match tokio::task::spawn_blocking(move || read_post(&directory, id)).await {
             Ok(Ok(Some(found))) => {
-                title = format!("{CHANNEL_TITLE} · {id}");
+                // A post of pictures alone has no sentence to show.
+                title = if found.sentence.is_empty() {
+                    format!("{CHANNEL_TITLE} · {id}")
+                } else {
+                    found.sentence
+                };
                 description = found.excerpt;
-                if let Some(found) = found.image {
-                    image = found;
-                }
+                kind = "article";
+                published = format!("{}:00{TIMEZONE}", found.date);
                 focus = id.to_string();
             }
             // The channel still opens, at its newest post: a dead link should
@@ -448,9 +456,6 @@ async fn page(
         (None, Some(host)) => format!("http://{host}"),
         (_, None) => String::new(),
     };
-    if image.starts_with('/') {
-        image = format!("{origin}{image}");
-    }
     let url = format!("{origin}{path}");
 
     let values = [
@@ -459,7 +464,8 @@ async fn page(
         ("channel_avatar", CHANNEL_AVATAR),
         ("title", title.as_str()),
         ("description", description.as_str()),
-        ("image", image.as_str()),
+        ("type", kind),
+        ("published", published.as_str()),
         ("url", url.as_str()),
         ("post", focus.as_str()),
     ];
@@ -996,8 +1002,9 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
         CowStr::from(format!("/posts/{id}/{url}"))
     };
 
+    // Plain text with a `\n` at every line break and block end, so the first
+    // sentence can stop at the first line.
     let mut excerpt = String::new();
-    let mut image = None;
     let mut events = Vec::new();
     let parser = pulldown_cmark::Parser::new_ext(
         body,
@@ -1007,7 +1014,7 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
         let event = match event {
             // Written like a Telegram message: Enter is a new line.
             Event::SoftBreak => {
-                excerpt.push(' ');
+                excerpt.push('\n');
                 Event::HardBreak
             }
             // A block's end is a word boundary in the excerpt too, or two
@@ -1021,7 +1028,7 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
                 | TagEnd::Item
                 | TagEnd::TableCell,
             ) => {
-                excerpt.push(' ');
+                excerpt.push('\n');
                 event
             }
             Event::Text(text) => {
@@ -1037,18 +1044,12 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
                 dest_url,
                 title,
                 id: reference,
-            }) => {
-                let dest_url = local(dest_url.into_static());
-                if image.is_none() {
-                    image = Some(dest_url.to_string());
-                }
-                Event::Start(Tag::Image {
-                    link_type,
-                    dest_url,
-                    title,
-                    id: reference,
-                })
-            }
+            }) => Event::Start(Tag::Image {
+                link_type,
+                dest_url: local(dest_url.into_static()),
+                title,
+                id: reference,
+            }),
             Event::Start(Tag::Link {
                 link_type,
                 dest_url,
@@ -1067,16 +1068,34 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events.into_iter());
 
-    let mut words = String::new();
-    for word in excerpt.split_whitespace() {
-        if !words.is_empty() {
-            words.push(' ');
+    // The first sentence ends at the first `.`, `!`, `?` or `؟` followed by
+    // a space, or at the first line break, whichever comes first.
+    let excerpt = excerpt.trim_start();
+    let mut split = excerpt.len();
+    let mut previous = None;
+    for (index, character) in excerpt.char_indices() {
+        if character == '\n'
+            || (character.is_whitespace() && matches!(previous, Some('.' | '!' | '?' | '؟')))
+        {
+            split = index;
+            break;
         }
-        words.push_str(word);
+        previous = Some(character);
     }
-    let excerpt = match words.char_indices().nth(200) {
-        Some((cut, _)) => format!("{}…", &words[..cut]),
-        None => words,
+    let (sentence, rest) = excerpt.split_at(split);
+    // One space between words, cut at `limit` characters with an ellipsis.
+    let squeeze = |text: &str, limit: usize| -> String {
+        let mut words = String::new();
+        for word in text.split_whitespace() {
+            if !words.is_empty() {
+                words.push(' ');
+            }
+            words.push_str(word);
+        }
+        match words.char_indices().nth(limit) {
+            Some((cut, _)) => format!("{}…", &words[..cut]),
+            None => words,
+        }
     };
 
     Ok(Some(Post {
@@ -1084,8 +1103,8 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
         date,
         html,
         views: 0,
-        excerpt,
-        image,
+        sentence: squeeze(sentence, 100),
+        excerpt: squeeze(rest, 200),
     }))
 }
 

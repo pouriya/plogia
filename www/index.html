@@ -2,8 +2,9 @@
 <!--
   Served for /, /index.html and /p/<n>. The server replaces each {{name}} with
   HTML-escaped text: channel_title, channel_description, channel_avatar, and,
-  per page, title, description, image, url (link previews) and post (the post
-  number to open at, empty for the newest).
+  per page, title, description, type, published, url (link previews; no
+  image on purpose) and post (the post number to open at, empty for the
+  newest).
 -->
 <html lang="en">
 <head>
@@ -11,12 +12,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{{title}}</title>
 <meta name="description" content="{{description}}">
-<meta property="og:type" content="website">
+<link rel="canonical" href="{{url}}">
+<meta property="og:type" content="{{type}}">
+<meta property="og:locale" content="fa_IR">
 <meta property="og:site_name" content="{{channel_title}}">
 <meta property="og:title" content="{{title}}">
 <meta property="og:description" content="{{description}}">
-<meta property="og:image" content="{{image}}">
 <meta property="og:url" content="{{url}}">
+<meta property="article:published_time" content="{{published}}">
 <meta name="twitter:card" content="summary">
 <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#17212b" media="(prefers-color-scheme: dark)">

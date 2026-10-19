@@ -65,8 +65,9 @@ Dockerfile      Pinned rust-alpine builder, pinned alpine runtime
 
 No configuration file and no environment variables. What the channel *is*
 lives as `const`s at the top of `src/main.rs`: `CHANNEL_TITLE` (`Π`, Greek
-capital pi), `CHANNEL_DESCRIPTION`, `CHANNEL_AVATAR`, `PAGE_SIZE` (20),
-`TEXT_LIMIT`, `ROBOT_MARKERS`. What differs per machine comes from the command
+capital pi), `CHANNEL_DESCRIPTION`, `CHANNEL_AVATAR`, `TIMEZONE` (`+03:30`, the
+zone post dates are written in), `PAGE_SIZE` (20), `TEXT_LIMIT`,
+`ROBOT_MARKERS`. What differs per machine comes from the command
 line, and every flag is mandatory with no default:
 
 ```
@@ -114,6 +115,16 @@ for=`, then `X-Forwarded-For`, then `X-Real-IP`, then the socket. The
 right-most entry is the one our own proxy appended; a client can forge
 anything to its left. Link previews take scheme and host from `Forwarded`,
 `X-Forwarded-Proto`/`-Host`, then `Host`.
+
+**Link previews** — what Telegram, WhatsApp and X show when someone pastes our
+link. Their bots are counted as robots but still get the page and its tags.
+`/` is `og:type=website` with `CHANNEL_TITLE` and `CHANNEL_DESCRIPTION`. `/p/<n>`
+is `og:type=article`: the title is the post's first sentence (up to the first
+`.` `!` `?` `؟` followed by a space, or the first line break; 100 characters at
+most), the description is the 200 characters after it, and
+`article:published_time` is the date in `TIMEZONE`. A post with no text is
+titled `Π · <n>`. Also `og:locale=fa_IR`, `rel=canonical`, `twitter:card=summary`.
+No `og:image`, on purpose: previews are text only.
 
 Everything answers `Cache-Control: no-cache` unless the handler set its own:
 the browser revalidates and gets a 304 for an unchanged file.
