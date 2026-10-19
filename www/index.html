@@ -1,0 +1,61 @@
+<!doctype html>
+<!--
+  Served for /, /index.html and /p/<n>. The server replaces each {{name}} with
+  HTML-escaped text: channel_title, channel_description, channel_avatar, and,
+  per page, title, description, image, url (link previews) and post (the post
+  number to open at, empty for the newest).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{title}}</title>
+<meta name="description" content="{{description}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{{channel_title}}">
+<meta property="og:title" content="{{title}}">
+<meta property="og:description" content="{{description}}">
+<meta property="og:image" content="{{image}}">
+<meta property="og:url" content="{{url}}">
+<meta name="twitter:card" content="summary">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#17212b" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="preload" href="/fonts/Vazirmatn-Regular.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wallpaper" aria-hidden="true"></div>
+
+<header class="top">
+  <a class="channel" href="/">
+    <img class="avatar" src="{{channel_avatar}}" alt="">
+    <span class="channel-text">
+      <span class="channel-title" dir="auto">{{channel_title}}</span>
+      <span class="channel-sub" id="subscribers">&nbsp;</span>
+    </span>
+  </a>
+</header>
+
+<main id="feed" data-post="{{post}}" data-channel="{{channel_title}}" data-avatar="{{channel_avatar}}">
+  <div class="sentinel" id="older"></div>
+  <section class="intro" id="intro" hidden>
+    <img class="avatar" src="{{channel_avatar}}" alt="">
+    <h1 dir="auto">{{channel_title}}</h1>
+    <p dir="auto">{{channel_description}}</p>
+  </section>
+  <div id="posts"></div>
+  <div class="sentinel" id="newer"></div>
+</main>
+
+<button class="down" id="down" type="button" aria-label="Go to the newest post" hidden>
+  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.4 8.6 12 13.2l4.6-4.6L18 10l-6 6-6-6z"/></svg>
+</button>
+
+<div class="lightbox" id="lightbox" hidden><img alt=""></div>
+
+<noscript><p class="pill">This channel needs JavaScript to show its posts.</p></noscript>
+<script src="/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,73 @@
+[package]
+name = "plogia"
+version = "0.1.0"
+edition = "2024"
+description = "A blog that looks and reads like a Telegram channel, with view counts"
+authors = ["Pouriya Jahanbakhsh <pouriya.jahanbakhsh@gmail.com>"]
+# Edition 2024 and let-chains.
+rust-version = "1.90"
+
+[dependencies]
+# The HTTP server and routes, plain HTTP behind a reverse proxy. `query` and
+# `json` are the API bodies, `matched-path` is the route template on the
+# access log.
+axum = { version = "0.8.9", default-features = false, features = [
+    "http1",
+    "tokio",
+    "json",
+    "query",
+    "matched-path",
+] }
+
+tokio = { version = "1.53.3", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "fs",
+    "signal",
+    "sync",
+    "time",
+] }
+
+# The front end (`--www`) and post media, with Range, Last-Modified and
+# conditional requests handled for us; `set-header` for their Cache-Control.
+tower-http = { version = "0.6.11", default-features = false, features = [
+    "fs",
+    "set-header",
+] }
+
+# Devices, visits and views, one row per event. `bundled` compiles SQLite
+# from source: no libsqlite3-dev on the host, same version everywhere.
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+
+# Posts are Markdown files, rendered to HTML on every request that reads them.
+pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+
+# `#[derive]` for the API bodies.
+serde = { version = "1.0.229", features = ["derive"] }
+
+# The 80 random bits of a device ULID, straight from the OS.
+getrandom = "0.4.3"
+
+# The four required flags and the logging flags.
+clap = { version = "4.6.7", default-features = false, features = [
+    "std",
+    "derive",
+    "help",
+    "usage",
+    "error-context",
+] }
+
+anyhow = "1.0"
+
+tracing = { version = "0.1.44", default-features = false, features = ["std", "attributes"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
+    "std",
+    "fmt",
+    "json",
+] }
+
+[profile.release]
+opt-level = 'z'     # Optimize for size.
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations.
