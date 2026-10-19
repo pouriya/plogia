@@ -50,7 +50,7 @@ result; do not claim it passed without running it.
 src/main.rs     The whole backend: settings consts, CLI, schema, routes, handlers
 www/            The front end, served as-is from --www
   index.html    Template for /, /index.html and /p/<n>; {{name}} filled by the server
-  app.js        Handshake, feed drawing, paging, view reporting
+  app.js        Handshake, feed drawing, paging, view reporting, message menu, channel info
   style.css     Telegram light / Night, by prefers-color-scheme
   plogia.jpg    Channel avatar and default link-preview image
   favicon.ico   16, 32, 48 px from plogia.jpg
@@ -105,7 +105,7 @@ posts/
 | `GET /`, `/index.html`, `/p/{n}` | `www/index.html` with link-preview tags filled; unknown `n` is a 404 that still shows the channel |
 | `GET /posts/{n}/{file}` | A post's media |
 | `POST /api/visit` | The handshake, once per page open: `{device?, path, referrer}` → `{device, subscribers}` |
-| `GET /api/posts?before=n\|after=n\|around=n` | One page of posts, oldest first, with `older`/`newer` flags and view totals |
+| `GET /api/posts?before=n\|after=n\|around=n` | One page of posts, oldest first, with `older`/`newer` flags, view totals and the channel's `total` post count |
 | `POST /api/views` | `{device, posts}` → `{views}`, the new totals |
 | anything else | A file from `--www` |
 
@@ -147,6 +147,18 @@ Client-drawn from the JSON API; the server only fills the template. Newest
 post at the bottom, the page opens there, older posts load as the reader
 scrolls up. Text direction is per block (`dir="auto"`), so Persian and English
 lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN.
+
+- **Message menu**: right click, or a long press on touch, opens Copy Text,
+  Copy Link (`/p/<n>`) and Forward. A round forward button sits beside each
+  bubble, on hover with a mouse and always on touch. Forward shares the link
+  alone through the system share sheet (`navigator.share`); where there is
+  none, it copies the link. Every copy shows a toast.
+- **Channel info**: no intro card in the feed. The header, or a post's avatar,
+  opens a Telegram-style panel — beside the feed from 1000px, over it below,
+  the whole screen at phone width — with the avatar, title, subscribers, a
+  Share button (the channel link, as Forward), the description, the site link
+  (tap copies) and the post count. Opening it is a history entry: back, ✕ or
+  Escape closes it.
 
 ## Docker
 

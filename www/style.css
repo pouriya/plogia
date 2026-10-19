@@ -37,6 +37,10 @@
   --wall-c: #d5d88d;
   --wall-d: #88b884;
   --dots: rgba(0, 0, 0, 0.05);
+  --panel: #fff;
+  --menu: rgba(255, 255, 255, 0.96);
+  --hover: rgba(0, 0, 0, 0.06);
+  --divider: #f1f1f1;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -56,6 +60,10 @@
     --wall-c: #13202d;
     --wall-d: #0f1b26;
     --dots: rgba(255, 255, 255, 0.03);
+    --panel: #17212b;
+    --menu: rgba(33, 47, 63, 0.96);
+    --hover: rgba(255, 255, 255, 0.06);
+    --divider: #0e1621;
   }
 }
 
@@ -103,16 +111,22 @@ body {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
+/* The whole bar opens the channel info, as in Telegram. */
 .channel {
   display: flex;
   align-items: center;
   gap: 12px;
+  width: 100%;
   height: 100%;
   max-width: 720px;
   margin: 0 auto;
   padding: 0 16px;
+  border: 0;
   color: inherit;
-  text-decoration: none;
+  background: none;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
 }
 
 .avatar {
@@ -159,21 +173,6 @@ main {
 
 .sentinel { height: 1px; }
 
-.intro {
-  max-width: 340px;
-  margin: 8px auto 18px;
-  padding: 18px 16px;
-  text-align: center;
-  color: #fff;
-  background: var(--pill);
-  border-radius: 18px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.intro .avatar { width: 88px; height: 88px; }
-.intro h1 { margin: 10px 0 4px; font-size: 20px; font-weight: 700; }
-.intro p { margin: 0; font-size: 15px; white-space: pre-line; }
-
 .day, .pill {
   position: sticky;
   top: 64px;
@@ -209,7 +208,33 @@ main {
   100% { background: transparent; }
 }
 
-.post > .avatar { width: 38px; height: 38px; }
+.post > .avatar { width: 38px; height: 38px; cursor: pointer; }
+
+/* Round forward button beside the bubble: on hover with a mouse, always on touch. */
+.forward {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--pill);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+.forward svg { width: 18px; height: 18px; fill: currentColor; }
+@media (hover: hover) {
+  .forward { opacity: 0; transition: opacity 0.15s; }
+  .post:hover .forward, .forward:focus-visible { opacity: 1; }
+}
+/* A long press opens the message menu, not the system's text selection. */
+@media (hover: none) {
+  .bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
 
 .bubble {
   position: relative;
@@ -322,6 +347,149 @@ main {
 .down[hidden] { display: none; }
 .down svg { width: 28px; height: 28px; fill: currentColor; }
 
+/* Message menu: right click, or a long press on touch. */
+.menu {
+  position: fixed;
+  z-index: 25;
+  min-width: 180px;
+  padding: 4px 0;
+  border-radius: 12px;
+  background: var(--menu);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+}
+.menu[hidden] { display: none; }
+.menu button {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 8px 16px;
+  border: 0;
+  color: inherit;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: start;
+  cursor: pointer;
+}
+.menu button:hover { background: var(--hover); }
+.menu svg { width: 20px; height: 20px; fill: var(--muted); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 84px;
+  z-index: 30;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 10px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.75);
+  font-size: 14px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.toast[hidden] { display: none; }
+
+/* Channel info: a column beside the feed on a wide screen, over it on a
+   narrower one, the whole screen on a phone. */
+.info {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15;
+  width: min(360px, 100%);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--panel);
+  box-shadow: -1px 0 3px rgba(0, 0, 0, 0.12);
+}
+.info[hidden] { display: none; }
+.info-bar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  padding: 0 8px;
+  background: var(--panel);
+  font-size: 18px;
+  font-weight: 500;
+}
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: none;
+  cursor: pointer;
+}
+.icon-button:hover { background: var(--hover); }
+.icon-button svg { width: 24px; height: 24px; fill: currentColor; }
+.icon-button .back { display: none; }
+.info-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 16px 16px;
+  text-align: center;
+  border-bottom: 8px solid var(--divider);
+}
+.info-head .avatar { width: 120px; height: 120px; }
+.info-head h1 { margin: 12px 0 2px; font-size: 20px; font-weight: 700; }
+.info-head p { margin: 0; color: var(--muted); font-size: 14px; }
+.info-share {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 8px 20px;
+  border: 0;
+  border-radius: 20px;
+  color: var(--accent);
+  background: var(--tint);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.info-share svg { width: 20px; height: 20px; fill: currentColor; }
+.info-rows { padding: 8px; }
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  text-align: start;
+}
+button.info-row { cursor: pointer; }
+button.info-row:hover { background: var(--hover); }
+.info-row svg { flex: none; width: 24px; height: 24px; fill: var(--muted); }
+.info-row div { min-width: 0; }
+.info-row p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
+.info-row span { color: var(--muted); font-size: 13px; }
+
+@media (min-width: 1000px) {
+  .info-open { padding-right: 360px; }
+  .info-open .top { right: 360px; }
+  .info-open .down { right: calc(360px + max(16px, 50vw - 524px)); }
+  .info { box-shadow: none; border-left: 1px solid var(--divider); }
+}
+
 .lightbox {
   position: fixed;
   inset: 0;
@@ -338,4 +506,7 @@ main {
   main { padding-left: 8px; padding-right: 8px; }
   .post > .avatar { display: none; }
   .bubble { margin-left: 8px; }
+  .info { width: 100%; box-shadow: none; }
+  .icon-button .x { display: none; }
+  .icon-button .back { display: block; }
 }

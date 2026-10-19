@@ -5,22 +5,27 @@
 // reader scrolls up, and reports a post to POST /api/views once it has been
 // at least half on screen for two continuous seconds — at most once per post
 // per page load, so fast scrolling counts nothing and coming back counts again.
+// A message opens a menu (Copy Text, Copy Link, Forward) on right click or long
+// press, and the header opens the channel info.
 
 (() => {
   const DEVICE_KEY = 'plogia.device';
   const DWELL_MS = 2000;
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
+  const FORWARD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5v4C7 10 4 15 3 20c2.5-3.5 6-5.1 11-5.1V19l7-7-7-7z"/></svg>';
   const EYE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C6.6 5 2.9 9.2 1.6 11.1a1.6 1.6 0 0 0 0 1.8C2.9 14.8 6.6 19 12 19s9.1-4.2 10.4-6.1a1.6 1.6 0 0 0 0-1.8C21.1 9.2 17.4 5 12 5zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>';
 
   const feed = document.getElementById('feed');
   const list = document.getElementById('posts');
   const olderSentinel = document.getElementById('older');
   const newerSentinel = document.getElementById('newer');
-  const intro = document.getElementById('intro');
   const down = document.getElementById('down');
   const subscribers = document.getElementById('subscribers');
   const lightbox = document.getElementById('lightbox');
+  const menu = document.getElementById('menu');
+  const toast = document.getElementById('toast');
+  const info = document.getElementById('info');
   const channel = feed.dataset.channel;
   const avatar = feed.dataset.avatar;
   const focus = feed.dataset.post ? Number(feed.dataset.post) : null;
@@ -46,6 +51,7 @@
       try { localStorage.setItem(DEVICE_KEY, body.device); } catch (_) { /* storage blocked */ }
       const count = body.subscribers;
       subscribers.textContent = `${count.toLocaleString('en')} subscriber${count === 1 ? '' : 's'}`;
+      document.getElementById('info-subscribers').textContent = subscribers.textContent;
       return body.device;
     } catch (error) {
       console.error(error);
@@ -216,8 +222,14 @@
     time.textContent = post.date.slice(11, 16);
     time.title = `${post.date.slice(0, 10)} ${post.date.slice(11, 16)}`;
 
+    const forward = document.createElement('button');
+    forward.className = 'forward';
+    forward.type = 'button';
+    forward.ariaLabel = 'Forward';
+    forward.innerHTML = FORWARD;
+
     bubble.append(author, text, meta);
-    article.append(picture, bubble);
+    article.append(picture, bubble, forward);
     return article;
   }
 
@@ -256,7 +268,9 @@
   async function fetchPosts(query) {
     const response = await fetch(`/api/posts${query}`);
     if (!response.ok) throw new Error(`GET /api/posts${query}: ${response.status}`);
-    return response.json();
+    const page = await response.json();
+    document.getElementById('info-posts').textContent = `${page.total.toLocaleString('en')} post${page.total === 1 ? '' : 's'}`;
+    return page;
   }
 
   // ---- Scrolling ----------------------------------------------------------
@@ -294,7 +308,6 @@
         state.last = page.posts[page.posts.length - 1].id;
         state.newer = page.newer;
       }
-      intro.hidden = state.older;
       if (older && anchor) scrollBy(0, anchor.getBoundingClientRect().top - before);
     } catch (error) {
       console.error(error);
@@ -326,17 +339,158 @@
   });
   addEventListener('scroll', updateDown, { passive: true });
 
-  // ---- Images -------------------------------------------------------------
+  // ---- Copy and forward ---------------------------------------------------
+
+  let toastTimer = null;
+  function notify(text) {
+    toast.textContent = text;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, 2000);
+  }
+
+  // navigator.clipboard exists only in a secure context; plain HTTP on a LAN
+  // address takes the old way.
+  async function copy(text, done) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (_) {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.append(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    notify(done);
+  }
+
+  // The system share sheet where there is one; elsewhere (desktop Linux, for
+  // one) the link is copied instead.
+  async function forward(url) {
+    if (navigator.share) {
+      try { await navigator.share({ url }); } catch (_) { /* dismissed */ }
+      return;
+    }
+    copy(url, 'Link copied to clipboard');
+  }
+
+  // ---- Message menu -------------------------------------------------------
+
+  let menuPost = null;
+
+  function openMenu(article, x, y) {
+    menuPost = article;
+    menu.hidden = false;
+    const box = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(x, innerWidth - box.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, innerHeight - box.height - 8))}px`;
+  }
+
+  function closeMenu() {
+    menu.hidden = true;
+    menuPost = null;
+  }
+
+  list.addEventListener('contextmenu', (event) => {
+    const bubble = event.target.closest('.bubble');
+    if (!bubble) return;
+    event.preventDefault();
+    openMenu(bubble.closest('.post'), event.clientX, event.clientY);
+  });
+
+  // iOS never fires contextmenu, so a long press is timed by hand. The click
+  // that would follow the press is swallowed, or it would follow a link.
+  let press = null;
+  let pressed = false;
+  list.addEventListener('touchstart', (event) => {
+    pressed = false;
+    const bubble = event.target.closest('.bubble');
+    if (!bubble || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    press = setTimeout(() => {
+      pressed = true;
+      openMenu(bubble.closest('.post'), touch.clientX, touch.clientY);
+    }, 500);
+  }, { passive: true });
+  list.addEventListener('touchmove', () => clearTimeout(press), { passive: true });
+  list.addEventListener('touchcancel', () => clearTimeout(press), { passive: true });
+  list.addEventListener('touchend', (event) => {
+    clearTimeout(press);
+    if (pressed) event.preventDefault();
+  });
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!menu.hidden && !menu.contains(event.target)) closeMenu();
+  });
+  addEventListener('scroll', () => { if (!menu.hidden) closeMenu(); }, { passive: true });
+  addEventListener('resize', () => { if (!menu.hidden) closeMenu(); });
+
+  menu.addEventListener('click', (event) => {
+    const item = event.target.closest('button');
+    if (!item || !menuPost) return;
+    const article = menuPost;
+    closeMenu();
+    const url = `${location.origin}/p/${article.dataset.id}`;
+    if (item.dataset.action === 'text') {
+      copy(article.querySelector('.text').innerText.trim(), 'Text copied to clipboard');
+    } else if (item.dataset.action === 'link') {
+      copy(url, 'Link copied to clipboard');
+    } else {
+      forward(url);
+    }
+  });
+
+  // ---- Channel info -------------------------------------------------------
+
+  // Opening it is a history entry, so the back button closes it as on a phone.
+  function openInfo() {
+    if (!info.hidden) return;
+    info.hidden = false;
+    document.body.classList.add('info-open');
+    history.pushState({ info: true }, '');
+  }
+
+  addEventListener('popstate', () => {
+    info.hidden = true;
+    document.body.classList.remove('info-open');
+  });
+
+  document.getElementById('channel').addEventListener('click', openInfo);
+  document.getElementById('info-close').addEventListener('click', () => history.back());
+  document.getElementById('info-share').addEventListener('click', () => forward(`${location.origin}/`));
+  document.getElementById('info-host').textContent = location.host;
+  document.getElementById('info-link').addEventListener('click', () => {
+    copy(`${location.origin}/`, 'Link copied to clipboard');
+  });
+
+  // ---- Clicks in the feed -------------------------------------------------
 
   list.addEventListener('click', (event) => {
+    const button = event.target.closest('.forward');
+    if (button) {
+      forward(`${location.origin}/p/${button.closest('.post').dataset.id}`);
+      return;
+    }
+    if (event.target.closest('.post > .avatar')) {
+      openInfo();
+      return;
+    }
     const image = event.target.closest('.text img');
     if (!image) return;
     lightbox.firstElementChild.src = image.currentSrc || image.src;
     lightbox.hidden = false;
   });
   lightbox.addEventListener('click', () => { lightbox.hidden = true; });
+
+  // Escape closes the top-most thing open.
   addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') lightbox.hidden = true;
+    if (event.key !== 'Escape') return;
+    if (!menu.hidden) closeMenu();
+    else if (!lightbox.hidden) lightbox.hidden = true;
+    else if (!info.hidden) history.back();
   });
 
   // ---- Start --------------------------------------------------------------
@@ -357,7 +511,6 @@
       state.last = page.posts[page.posts.length - 1].id;
     }
     add(page.posts, false);
-    intro.hidden = state.older;
     if (page.posts.length === 0) message('No posts yet.');
 
     const target = focus === null ? null : document.getElementById(`post-${focus}`);

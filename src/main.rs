@@ -707,6 +707,8 @@ struct PostsResponse {
     older: bool,
     /// Whether there are posts after the last one here.
     newer: bool,
+    /// Every post in the channel, for the channel info's post count.
+    total: usize,
 }
 
 /// `GET /api/posts`: one page of posts, newest page when no cursor is given.
@@ -760,6 +762,7 @@ async fn posts(State(app): State<Arc<App>>, Query(query): Query<PostsQuery>) -> 
             posts,
             older: start > 0,
             newer: end < ids.len(),
+            total: ids.len(),
         })
     })
     .await;
