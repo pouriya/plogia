@@ -60,7 +60,9 @@
     <span>Channel Info</span>
   </div>
   <div class="info-head">
-    <img class="avatar" src="{{channel_avatar}}" alt="">
+    <button class="info-photo" id="info-photo" type="button" aria-label="Open the photo">
+      <img class="avatar" src="{{channel_avatar}}" alt="">
+    </button>
     <h1 dir="auto">{{channel_title}}</h1>
     <p id="info-subscribers">&nbsp;</p>
     <button class="info-share" id="info-share" type="button">
@@ -83,6 +85,17 @@
     </div>
   </div>
 </aside>
+
+<div class="viewer" id="viewer" hidden>
+  <div class="viewer-bar">
+    <img class="avatar" src="{{channel_avatar}}" alt="">
+    <span dir="auto">{{channel_title}}</span>
+    <button class="icon-button" id="viewer-close" type="button" aria-label="Close">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+    </button>
+  </div>
+  <div class="viewer-stage"><img src="{{channel_avatar}}" alt=""></div>
+</div>
 
 <div class="menu" id="menu" role="menu" hidden>
   <button type="button" role="menuitem" data-action="text">

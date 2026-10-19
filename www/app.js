@@ -26,6 +26,7 @@
   const menu = document.getElementById('menu');
   const toast = document.getElementById('toast');
   const info = document.getElementById('info');
+  const viewer = document.getElementById('viewer');
   const channel = feed.dataset.channel;
   const avatar = feed.dataset.avatar;
   const focus = feed.dataset.post ? Number(feed.dataset.post) : null;
@@ -445,7 +446,8 @@
 
   // ---- Channel info -------------------------------------------------------
 
-  // Opening it is a history entry, so the back button closes it as on a phone.
+  // The panel, and the photo opened from it, are each a history entry, so the
+  // back button closes the top one as on a phone.
   function openInfo() {
     if (!info.hidden) return;
     info.hidden = false;
@@ -454,8 +456,19 @@
   }
 
   addEventListener('popstate', () => {
-    info.hidden = true;
-    document.body.classList.remove('info-open');
+    const state = history.state || {};
+    viewer.hidden = !state.photo;
+    info.hidden = !state.info;
+    document.body.classList.toggle('info-open', !info.hidden);
+  });
+
+  document.getElementById('info-photo').addEventListener('click', () => {
+    viewer.hidden = false;
+    history.pushState({ info: true, photo: true }, '');
+  });
+  document.getElementById('viewer-close').addEventListener('click', () => history.back());
+  viewer.addEventListener('click', (event) => {
+    if (event.target.closest('.viewer-stage') && event.target.tagName !== 'IMG') history.back();
   });
 
   document.getElementById('channel').addEventListener('click', openInfo);
@@ -490,7 +503,7 @@
     if (event.key !== 'Escape') return;
     if (!menu.hidden) closeMenu();
     else if (!lightbox.hidden) lightbox.hidden = true;
-    else if (!info.hidden) history.back();
+    else if (!viewer.hidden || !info.hidden) history.back();
   });
 
   // ---- Start --------------------------------------------------------------

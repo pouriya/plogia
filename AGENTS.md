@@ -170,6 +170,9 @@ lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN.
   Share button (the channel link, as Forward), the description, the site link
   (tap copies) and the post count. Opening it is a history entry: back, ✕ or
   Escape closes it.
+- **Profile photo**: tapping the big avatar in the channel info opens it full
+  screen, Telegram's viewer: a top bar with avatar, title and ✕. Another
+  history entry: back, ✕, Escape or a tap beside the photo returns to the info.
 
 ## Docker
 
