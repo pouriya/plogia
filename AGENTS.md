@@ -170,6 +170,15 @@ lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN.
   Share button (the channel link, as Forward), the description, the site link
   (tap copies) and the post count. Opening it is a history entry: back, ✕ or
   Escape closes it.
+- **Language**: English or Persian, English by default. A saved choice in
+  `localStorage` (`plogia.language`) wins; without one, the first English or
+  Persian entry in `navigator.languages` (browser, then system) does. The
+  channel info has a row that toggles it, in place, no reload. Persian turns
+  the whole layout right to left, keeps Latin digits, and dates day pills and
+  time tooltips in the solar Hijri calendar (`Intl`, `fa-IR-u-ca-persian`).
+  Every UI string lives in `STRINGS` in `app.js`; static ones in `index.html`
+  carry `data-text`/`data-label` with their key. Posts themselves are never
+  translated, and keep their own per-block direction.
 - **Profile photo**: tapping the big avatar in the channel info opens it full
   screen, Telegram's viewer: a top bar with avatar, title and ✕. Another
   history entry: back, ✕, Escape or a tap beside the photo returns to the info.

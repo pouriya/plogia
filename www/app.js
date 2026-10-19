@@ -6,14 +6,60 @@
 // at least half on screen for two continuous seconds — at most once per post
 // per page load, so fast scrolling counts nothing and coming back counts again.
 // A message opens a menu (Copy Text, Copy Link, Forward) on right click or long
-// press, and the header opens the channel info.
+// press, and the header opens the channel info. The page speaks English or
+// Persian: the reader's choice from the channel info, else the browser's.
 
 (() => {
   const DEVICE_KEY = 'plogia.device';
+  const LANGUAGE_KEY = 'plogia.language';
   const DWELL_MS = 2000;
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
   const FORWARD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5v4C7 10 4 15 3 20c2.5-3.5 6-5.1 11-5.1V19l7-7-7-7z"/></svg>';
+  // Every string the page shows. Persian keeps Latin digits and uses the solar
+  // Hijri calendar; it also turns the whole layout right to left.
+  const STRINGS = {
+    en: {
+      subscribers: (count) => `${count.toLocaleString('en')} subscriber${count === 1 ? '' : 's'}`,
+      posts: (count) => `${count.toLocaleString('en')} post${count === 1 ? '' : 's'}`,
+      channelInfo: 'Channel Info',
+      share: 'Share',
+      info: 'Info',
+      link: 'Link',
+      language: 'Language',
+      languageName: 'English',
+      copyText: 'Copy Text',
+      copyLink: 'Copy Link',
+      forward: 'Forward',
+      textCopied: 'Text copied to clipboard',
+      linkCopied: 'Link copied to clipboard',
+      noPosts: 'No posts yet.',
+      loadFailed: 'Could not load the posts. Try again in a moment.',
+      close: 'Close',
+      newest: 'Go to the newest post',
+      openPhoto: 'Open the photo',
+    },
+    fa: {
+      subscribers: (count) => `${count.toLocaleString('en')} مشترک`,
+      posts: (count) => `${count.toLocaleString('en')} پست`,
+      channelInfo: 'اطلاعات کانال',
+      share: 'اشتراک‌گذاری',
+      info: 'توضیحات',
+      link: 'پیوند',
+      language: 'زبان',
+      languageName: 'فارسی',
+      copyText: 'کپی متن',
+      copyLink: 'کپی پیوند',
+      forward: 'هدایت',
+      textCopied: 'متن کپی شد',
+      linkCopied: 'پیوند کپی شد',
+      noPosts: 'هنوز پستی نیست.',
+      loadFailed: 'پست‌ها بارگیری نشدند. کمی بعد دوباره امتحان کنید.',
+      close: 'بستن',
+      newest: 'رفتن به تازه‌ترین پست',
+      openPhoto: 'باز کردن عکس',
+    },
+  };
   const EYE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C6.6 5 2.9 9.2 1.6 11.1a1.6 1.6 0 0 0 0 1.8C2.9 14.8 6.6 19 12 19s9.1-4.2 10.4-6.1a1.6 1.6 0 0 0 0-1.8C21.1 9.2 17.4 5 12 5zm0 11.5a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9zm0-7a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>';
 
   const feed = document.getElementById('feed');
@@ -33,6 +79,55 @@
 
   const state = { older: false, newer: false, loading: false, first: null, last: null };
 
+  // ---- Language -----------------------------------------------------------
+
+  // A saved choice sticks. Without one, the first English or Persian entry in
+  // the browser's list (which follows the system's) wins, and English if none.
+  let language = null;
+  try { language = localStorage.getItem(LANGUAGE_KEY); } catch (_) { /* storage blocked */ }
+  if (!Object.hasOwn(STRINGS, language)) {
+    language = 'en';
+    for (const tag of navigator.languages || [navigator.language]) {
+      const base = tag.toLowerCase().split('-')[0];
+      if (base === 'en' || base === 'fa') {
+        language = base;
+        break;
+      }
+    }
+  }
+  let words = STRINGS[language];
+  let subscriberCount = null;
+  let postCount = null;
+
+  // Redraws every string in place, so switching needs no reload.
+  function applyLanguage() {
+    words = STRINGS[language];
+    document.documentElement.lang = language;
+    document.documentElement.dir = language === 'fa' ? 'rtl' : 'ltr';
+    for (const element of document.querySelectorAll('[data-text]')) {
+      element.textContent = words[element.dataset.text];
+    }
+    for (const element of document.querySelectorAll('[data-label]')) {
+      element.ariaLabel = words[element.dataset.label];
+    }
+    if (subscriberCount !== null) {
+      subscribers.textContent = words.subscribers(subscriberCount);
+      document.getElementById('info-subscribers').textContent = subscribers.textContent;
+    }
+    if (postCount !== null) document.getElementById('info-posts').textContent = words.posts(postCount);
+    for (const time of list.querySelectorAll('.meta a')) {
+      time.title = timeLabel(time.closest('.post').dataset.date);
+    }
+    placeDays();
+  }
+
+  document.getElementById('info-language').addEventListener('click', () => {
+    language = language === 'en' ? 'fa' : 'en';
+    try { localStorage.setItem(LANGUAGE_KEY, language); } catch (_) { /* storage blocked */ }
+    applyLanguage();
+  });
+  applyLanguage();
+
   // ---- Handshake ----------------------------------------------------------
 
   // Automated browsers announce themselves here; they get no device, so they
@@ -50,8 +145,8 @@
       if (response.status !== 200) return null;
       const body = await response.json();
       try { localStorage.setItem(DEVICE_KEY, body.device); } catch (_) { /* storage blocked */ }
-      const count = body.subscribers;
-      subscribers.textContent = `${count.toLocaleString('en')} subscriber${count === 1 ? '' : 's'}`;
+      subscriberCount = body.subscribers;
+      subscribers.textContent = words.subscribers(subscriberCount);
       document.getElementById('info-subscribers').textContent = subscribers.textContent;
       return body.device;
     } catch (error) {
@@ -173,10 +268,34 @@
     return trim(count / 1e6) + 'M';
   }
 
+  function persian(options, at) {
+    return new Intl.DateTimeFormat('fa-IR-u-ca-persian-nu-latn', options).format(at);
+  }
+
+  // `YYYY-MM-DD` as a day pill: "October 19" or "27 مهر", with the year only
+  // when it is not this year's.
   function dayLabel(day) {
     const [year, month, date] = day.split('-').map(Number);
+    if (language === 'fa') {
+      const at = new Date(year, month - 1, date, 12);
+      const options = { day: 'numeric', month: 'long' };
+      if (persian({ year: 'numeric' }, at) !== persian({ year: 'numeric' }, new Date())) {
+        options.year = 'numeric';
+      }
+      return persian(options, at);
+    }
     const label = `${MONTHS[month - 1]} ${date}`;
     return year === new Date().getFullYear() ? label : `${label}, ${year}`;
+  }
+
+  // `YYYY-MM-DDTHH:MM` as the tooltip of a post's time.
+  function timeLabel(date) {
+    if (language === 'fa') {
+      const [year, month, day] = date.slice(0, 10).split('-').map(Number);
+      const at = new Date(year, month - 1, day, 12);
+      return `${persian({ day: 'numeric', month: 'long', year: 'numeric' }, at)} ${date.slice(11, 16)}`;
+    }
+    return `${date.slice(0, 10)} ${date.slice(11, 16)}`;
   }
 
   function render(post) {
@@ -185,6 +304,7 @@
     article.id = `post-${post.id}`;
     article.dataset.id = post.id;
     article.dataset.day = post.date.slice(0, 10);
+    article.dataset.date = post.date;
 
     const picture = document.createElement('img');
     picture.className = 'avatar';
@@ -221,12 +341,13 @@
     const time = meta.querySelector('a');
     time.href = `/p/${post.id}`;
     time.textContent = post.date.slice(11, 16);
-    time.title = `${post.date.slice(0, 10)} ${post.date.slice(11, 16)}`;
+    time.title = timeLabel(post.date);
 
     const forward = document.createElement('button');
     forward.className = 'forward';
     forward.type = 'button';
-    forward.ariaLabel = 'Forward';
+    forward.dataset.label = 'forward';
+    forward.ariaLabel = words.forward;
     forward.innerHTML = FORWARD;
 
     bubble.append(author, text, meta);
@@ -259,10 +380,11 @@
     placeDays();
   }
 
-  function message(text) {
+  function message(key) {
     const pill = document.createElement('p');
     pill.className = 'pill';
-    pill.textContent = text;
+    pill.dataset.text = key;
+    pill.textContent = words[key];
     list.append(pill);
   }
 
@@ -270,7 +392,8 @@
     const response = await fetch(`/api/posts${query}`);
     if (!response.ok) throw new Error(`GET /api/posts${query}: ${response.status}`);
     const page = await response.json();
-    document.getElementById('info-posts').textContent = `${page.total.toLocaleString('en')} post${page.total === 1 ? '' : 's'}`;
+    postCount = page.total;
+    document.getElementById('info-posts').textContent = words.posts(postCount);
     return page;
   }
 
@@ -375,7 +498,7 @@
       try { await navigator.share({ url }); } catch (_) { /* dismissed */ }
       return;
     }
-    copy(url, 'Link copied to clipboard');
+    copy(url, words.linkCopied);
   }
 
   // ---- Message menu -------------------------------------------------------
@@ -436,9 +559,9 @@
     closeMenu();
     const url = `${location.origin}/p/${article.dataset.id}`;
     if (item.dataset.action === 'text') {
-      copy(article.querySelector('.text').innerText.trim(), 'Text copied to clipboard');
+      copy(article.querySelector('.text').innerText.trim(), words.textCopied);
     } else if (item.dataset.action === 'link') {
-      copy(url, 'Link copied to clipboard');
+      copy(url, words.linkCopied);
     } else {
       forward(url);
     }
@@ -476,7 +599,7 @@
   document.getElementById('info-share').addEventListener('click', () => forward(`${location.origin}/`));
   document.getElementById('info-host').textContent = location.host;
   document.getElementById('info-link').addEventListener('click', () => {
-    copy(`${location.origin}/`, 'Link copied to clipboard');
+    copy(`${location.origin}/`, words.linkCopied);
   });
 
   // ---- Clicks in the feed -------------------------------------------------
@@ -514,7 +637,7 @@
       page = await fetchPosts(focus ? `?around=${focus}` : '');
     } catch (error) {
       console.error(error);
-      message('Could not load the posts. Try again in a moment.');
+      message('loadFailed');
       return;
     }
     state.older = page.older;
@@ -524,7 +647,7 @@
       state.last = page.posts[page.posts.length - 1].id;
     }
     add(page.posts, false);
-    if (page.posts.length === 0) message('No posts yet.');
+    if (page.posts.length === 0) message('noPosts');
 
     const target = focus === null ? null : document.getElementById(`post-${focus}`);
     if (target) {

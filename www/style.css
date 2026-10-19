@@ -242,17 +242,18 @@ main {
   max-width: min(100%, 520px);
   padding: 6px 10px 6px;
   background: var(--bubble);
-  border-radius: 12px 12px 12px 0;
+  border-radius: 12px;
+  border-end-start-radius: 0;
   box-shadow: var(--shadow);
   overflow-wrap: anywhere;
 }
 .bubble:has(img) { flex: 1 1 520px; }
 
-/* The tail at the bottom-left corner, Telegram's own path. */
+/* The tail at the bottom corner on the avatar's side, Telegram's own path. */
 .bubble::before {
   content: "";
   position: absolute;
-  left: -8px;
+  inset-inline-start: -8px;
   bottom: 0;
   width: 9px;
   height: 17px;
@@ -260,6 +261,9 @@ main {
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='17'%3E%3Cpath d='M3 17h6V0c-.193 2.84-.876 5.767-2.05 8.782-.904 2.325-2.446 4.485-4.625 6.48A1 1 0 0 0 3 17z'/%3E%3C/svg%3E") no-repeat;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='17'%3E%3Cpath d='M3 17h6V0c-.193 2.84-.876 5.767-2.05 8.782-.904 2.325-2.446 4.485-4.625 6.48A1 1 0 0 0 3 17z'/%3E%3C/svg%3E") no-repeat;
 }
+
+/* Right to left, the tail sits on the right and turns the other way. */
+[dir="rtl"] .bubble::before { transform: scaleX(-1); }
 
 .author {
   margin-bottom: 2px;
@@ -320,6 +324,7 @@ main {
   direction: ltr;
   user-select: none;
 }
+[dir="rtl"] .meta { justify-content: flex-start; }
 .meta a { color: inherit; text-decoration: none; }
 .meta a:hover { text-decoration: underline; }
 .views { display: inline-flex; align-items: center; gap: 3px; }
@@ -329,7 +334,7 @@ main {
 
 .down {
   position: fixed;
-  right: max(16px, calc(50vw - 344px));
+  inset-inline-end: max(16px, calc(50vw - 344px));
   bottom: 20px;
   z-index: 5;
   display: grid;
@@ -399,7 +404,7 @@ main {
 .info {
   position: fixed;
   top: 0;
-  right: 0;
+  inset-inline-end: 0;
   bottom: 0;
   z-index: 15;
   width: min(360px, 100%);
@@ -408,6 +413,7 @@ main {
   background: var(--panel);
   box-shadow: -1px 0 3px rgba(0, 0, 0, 0.12);
 }
+[dir="rtl"] .info { box-shadow: 1px 0 3px rgba(0, 0, 0, 0.12); }
 .info[hidden] { display: none; }
 .info-bar {
   position: sticky;
@@ -436,6 +442,7 @@ main {
 .icon-button:hover { background: var(--hover); }
 .icon-button svg { width: 24px; height: 24px; fill: currentColor; }
 #info-close .back { display: none; }
+[dir="rtl"] #info-close .back { transform: scaleX(-1); }
 .info-head {
   display: flex;
   flex-direction: column;
@@ -491,10 +498,10 @@ button.info-row:hover { background: var(--hover); }
 .info-row span { color: var(--muted); font-size: 13px; }
 
 @media (min-width: 1000px) {
-  .info-open { padding-right: 360px; }
-  .info-open .top { right: 360px; }
-  .info-open .down { right: calc(360px + max(16px, 50vw - 524px)); }
-  .info { box-shadow: none; border-left: 1px solid var(--divider); }
+  .info-open { padding-inline-end: 360px; }
+  .info-open .top { inset-inline-end: 360px; }
+  .info-open .down { inset-inline-end: calc(360px + max(16px, 50vw - 524px)); }
+  .info, [dir="rtl"] .info { box-shadow: none; border-inline-start: 1px solid var(--divider); }
 }
 
 /* The channel photo, full screen, as Telegram opens a profile picture. */
@@ -513,7 +520,7 @@ button.info-row:hover { background: var(--hover); }
   align-items: center;
   gap: 12px;
   height: 56px;
-  padding: 0 8px 0 16px;
+  padding-inline: 16px 8px;
   color: #fff;
 }
 .viewer-bar .avatar { width: 40px; height: 40px; }
@@ -544,8 +551,8 @@ button.info-row:hover { background: var(--hover); }
 @media (max-width: 480px) {
   main { padding-left: 8px; padding-right: 8px; }
   .post > .avatar { display: none; }
-  .bubble { margin-left: 8px; }
-  .info { width: 100%; box-shadow: none; }
+  .bubble { margin-inline-start: 8px; }
+  .info, [dir="rtl"] .info { width: 100%; box-shadow: none; }
   #info-close .x { display: none; }
   #info-close .back { display: block; }
 }
