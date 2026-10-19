@@ -27,7 +27,7 @@ use axum::{
     routing::{get, post},
 };
 use clap::Parser;
-use pulldown_cmark::{CowStr, Event, Options, Tag};
+use pulldown_cmark::{CowStr, Event, Options, Tag, TagEnd};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use tower_http::{
@@ -1006,6 +1006,20 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
             Event::SoftBreak => {
                 excerpt.push(' ');
                 Event::HardBreak
+            }
+            // A block's end is a word boundary in the excerpt too, or two
+            // paragraphs read as one run-on word in a link preview.
+            Event::HardBreak
+            | Event::End(
+                TagEnd::Paragraph
+                | TagEnd::Heading(_)
+                | TagEnd::BlockQuote(_)
+                | TagEnd::CodeBlock
+                | TagEnd::Item
+                | TagEnd::TableCell,
+            ) => {
+                excerpt.push(' ');
+                event
             }
             Event::Text(text) => {
                 excerpt.push_str(&text);
