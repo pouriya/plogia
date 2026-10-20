@@ -59,6 +59,8 @@ www/            The front end, served as-is from --www
   fonts/        Vazirmatn Regular, Medium, Bold (woff2) and its OFL license
 posts/          The channel's posts, one folder each
 Makefile        Every build/check entry point. Use it, not cargo.
+README.md       For people running their own: run, write a post, email setup
+LICENSE         MIT
 Dockerfile      Pinned rust-alpine builder, pinned alpine runtime
 ```
 
