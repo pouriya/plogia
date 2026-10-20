@@ -507,20 +507,49 @@ async fn main() -> anyhow::Result<()> {
         let queued = database(&app, move |connection| {
             let transaction = connection.unchecked_transaction()?;
             let at = now();
+            let mut subscribers = Vec::new();
+            {
+                let mut statement = transaction.prepare("SELECT id, email FROM subscriber")?;
+                let mut rows = statement.query([])?;
+                while let Some(row) = rows.next()? {
+                    subscribers.push((row.get::<_, i64>(0)?, row.get::<_, String>(1)?));
+                }
+            }
             let mut queued = 0;
+            let mut skipped = 0;
             for id in &ids {
-                queued += transaction.execute(
-                    "INSERT OR IGNORE INTO delivery (post, subscriber, status, attempts, next_at, error, at)
-                     SELECT ?1, id, 'pending', 0, ?2, NULL, ?2 FROM subscriber",
-                    params![id, at],
-                )?;
+                for (subscriber, email) in &subscribers {
+                    if noreply(email) {
+                        let added = transaction.execute(
+                            "INSERT OR IGNORE INTO delivery (post, subscriber, status, attempts, next_at, error, at)
+                             VALUES (?1, ?2, 'skipped', 0, NULL, 'noreply address', ?3)",
+                            params![id, subscriber, at],
+                        )?;
+                        if added == 1 {
+                            tracing::warn!(msg = "Skipped post email to a noreply address", post = id, email = %email);
+                        }
+                        skipped += added;
+                    } else {
+                        queued += transaction.execute(
+                            "INSERT OR IGNORE INTO delivery (post, subscriber, status, attempts, next_at, error, at)
+                             VALUES (?1, ?2, 'pending', 0, ?3, NULL, ?3)",
+                            params![id, subscriber, at],
+                        )?;
+                    }
+                }
             }
             transaction.commit()?;
-            Ok(queued)
+            Ok((queued, skipped))
         })
         .await;
         match queued {
-            Ok(queued) => tracing::info!(msg = "Queued post emails", emails = queued),
+            Ok((queued, skipped)) => {
+                tracing::info!(
+                    msg = "Queued post emails",
+                    emails = queued,
+                    skipped = skipped
+                );
+            }
             Err(error) => {
                 tracing::error!(msg = "Could not queue post emails", error = %format!("{error:#}"));
                 return;
@@ -588,6 +617,25 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let kind = if post < 0 { "welcome" } else { "post" };
+            // Rows owed from before the rule existed.
+            if noreply(&email) {
+                tracing::warn!(msg = "Skipped email to a noreply address", kind = kind, post = post, email = %email);
+                let at = now();
+                let recorded = database(&app, move |connection| {
+                    connection.execute(
+                        "UPDATE delivery
+                         SET status = 'skipped', next_at = NULL, error = 'noreply address', at = ?1
+                         WHERE post = ?2 AND subscriber = ?3",
+                        params![at, post, subscriber],
+                    )
+                })
+                .await;
+                if let Err(error) = recorded {
+                    tracing::error!(msg = "Could not record email, stopped sending", kind = kind, post = post, email = %email, error = %format!("{error:#}"));
+                    return;
+                }
+                continue;
+            }
             tracing::debug!(msg = "Sending email", kind = kind, post = post, email = %email, attempt = attempts + 1);
             // The error and whether it is worth another try (a 4xx answer).
             let outcome: Result<String, (String, bool)> = 'send: {
@@ -1418,6 +1466,8 @@ async fn subscribe(
         }
     };
     let logged = email.clone();
+    // Accepted and counted like anyone, but sent nothing, ever.
+    let quiet = noreply(&email);
     let result = database(&app, move |connection| {
         let transaction = connection.unchecked_transaction()?;
         let at = now();
@@ -1429,11 +1479,19 @@ async fn subscribe(
         if added == 1 {
             let subscriber = transaction.last_insert_rowid();
             // Their welcome, sent at once; post numbers are never negative.
-            transaction.execute(
-                "INSERT INTO delivery (post, subscriber, status, attempts, next_at, error, at)
-                 VALUES (-1, ?1, 'pending', 0, ?2, NULL, ?2)",
-                params![subscriber, at],
-            )?;
+            if quiet {
+                transaction.execute(
+                    "INSERT INTO delivery (post, subscriber, status, attempts, next_at, error, at)
+                     VALUES (-1, ?1, 'skipped', 0, NULL, 'noreply address', ?2)",
+                    params![subscriber, at],
+                )?;
+            } else {
+                transaction.execute(
+                    "INSERT INTO delivery (post, subscriber, status, attempts, next_at, error, at)
+                     VALUES (-1, ?1, 'pending', 0, ?2, NULL, ?2)",
+                    params![subscriber, at],
+                )?;
+            }
             for id in &ids {
                 transaction.execute(
                     "INSERT INTO delivery (post, subscriber, status, attempts, next_at, error, at)
@@ -1449,7 +1507,9 @@ async fn subscribe(
     match result {
         Ok(added) => {
             tracing::info!(msg = "Subscribed", email = %logged, new = added);
-            if added {
+            if added && quiet {
+                tracing::warn!(msg = "Skipped welcome email to a noreply address", email = %logged);
+            } else if added {
                 app.wake.notify_one();
             }
             StatusCode::NO_CONTENT.into_response()
@@ -1879,6 +1939,17 @@ fn post_ids(directory: &FilePath) -> anyhow::Result<Vec<u32>> {
     }
     ids.sort_unstable();
     Ok(ids)
+}
+
+/// Whether the user part of `email` says nobody reads it: `noreply` or
+/// `no-reply` anywhere in it, in any case. Such subscribers are kept and
+/// counted, and sent nothing.
+fn noreply(email: &str) -> bool {
+    let user = match email.rsplit_once('@') {
+        Some((user, _)) => user.to_lowercase(),
+        None => email.to_lowercase(),
+    };
+    user.contains("noreply") || user.contains("no-reply")
 }
 
 /// The visitor's address behind our proxy, else the socket's.

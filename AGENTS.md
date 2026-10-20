@@ -190,6 +190,11 @@ key    (name PRIMARY KEY, value)                      -- `dkim`: the signing key
   time, oldest first; with none due it waits until a new subscriber or the
   next retry wakes it. **New posts are emailed on the next start**, not when
   their folder appears; welcomes go at once.
+- **noreply addresses**: an email whose user part contains `noreply` or
+  `no-reply`, in any case, is accepted and counted like any other, but sent
+  nothing: its welcome and every post get a `skipped` row with error
+  `noreply address`, each logged at `warn`. The sender checks again before
+  every send, so rows owed from before the rule are skipped too.
 - **The welcome**: only to an email that is new; subscribing a known one again
   sends nothing, so the form cannot flood an inbox. Subject `EMAIL_TITLE · عضو
   شدید / You're subscribed`; Persian first, then English: a greeting, "به Π

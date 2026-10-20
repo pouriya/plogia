@@ -2,7 +2,7 @@
 
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**A blog that looks and reads like a Telegram channel.**
+**A blog that looks and reads like a Telegram channel.** See it live at [plogia.ir](https://plogia.ir).
 
 Posts are folders of Markdown. plogia serves them as a channel feed, counts who read what, and emails each new post to its subscribers. It is one binary and one SQLite file, with no mail relay, no CDN and nothing else to run beside it.
 
@@ -62,6 +62,9 @@ What the channel *is* lives as constants at the top of `src/main.rs`: its title,
 
 plogia delivers mail itself, straight to each subscriber's mail server. A new subscriber gets a welcome right away; after that, every new post. Gmail, Outlook and the rest refuse mail they cannot verify, so it needs a few things from you first.
 
+<details>
+<summary><b>Set up email</b> — outbound port 25, three DNS records and reverse DNS</summary>
+
 **1. Outbound port 25.** Many hosts block it. Check from where plogia runs:
 
 ```bash
@@ -92,6 +95,8 @@ wget -qO- https://ifconfig.me
 
 Check the records with `dig +short TXT plogia._domainkey.example.com`. Then subscribe your own address and open the welcome in Gmail with *Show original*. SPF, DKIM and DMARC should all say `PASS`.
 
+</details>
+
 <details>
 <summary><b>When an email does not arrive</b></summary>
 
@@ -117,7 +122,7 @@ docker restart plogia
 
 </details>
 
-Subscribing needs only an email and a captcha. There is no confirmation and no unsubscribe yet.
+Subscribing needs only an email and a captcha. There is no confirmation and no unsubscribe yet. An address with `noreply` or `no-reply` before the `@` is accepted and counted, but never sent anything.
 
 ## Development
 
