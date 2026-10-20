@@ -583,11 +583,17 @@ button.info-row:hover { background: var(--hover); }
 .can-join .down { bottom: 76px; }
 .can-join .toast { bottom: 140px; }
 
+/* Compact, so the whole Join panel fits a phone screen without scrolling. */
+#join-panel .info-head { padding: 0 16px 12px; }
+#join-panel .info-head .avatar { width: 72px; height: 72px; }
+#join-panel .info-head h1 { margin-top: 8px; font-size: 18px; }
+#join-panel .cards { padding: 10px 16px 12px; }
+#join-panel .card { padding: 10px 4px 8px; }
 .join-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 16px 20px 20px;
+  gap: 8px;
+  padding: 12px 20px 16px;
   border-bottom: 8px solid var(--divider);
 }
 .join-lead {
@@ -611,15 +617,29 @@ button.info-row:hover { background: var(--hover); }
 }
 .join-form input::placeholder { color: var(--muted); }
 .join-form input:focus { outline: none; border-color: var(--accent); }
-.captcha { display: flex; align-items: center; gap: 8px; }
+/* The picture, and beside it a square ↻ in the middle of what is left. */
+.captcha {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) 1fr;
+  align-items: center;
+  gap: 8px;
+}
 .captcha img {
-  width: 220px;
-  max-width: calc(100% - 48px);
+  width: 100%;
   height: auto;
   aspect-ratio: 220 / 120;
   border-radius: 10px;
   background: #fff;
 }
+.captcha .icon-button {
+  justify-self: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  background: var(--divider);
+}
+.captcha .icon-button:hover { background: linear-gradient(var(--hover), var(--hover)), var(--divider); }
+.captcha .icon-button svg { width: 32px; height: 32px; }
 .join-error { margin: 0; color: #e53935; font-size: 14px; }
 .join-error[hidden] { display: none; }
 .join-submit {

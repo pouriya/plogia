@@ -1,6 +1,6 @@
 [package]
 name = "plogia"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 description = "A blog that looks and reads like a Telegram channel, with view counts"
 authors = ["Pouriya Jahanbakhsh <pouriya.jahanbakhsh@gmail.com>"]

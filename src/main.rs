@@ -183,6 +183,8 @@ struct App {
     captchas: Mutex<VecDeque<(String, String, Instant)>>,
     /// Who was given a captcha in the last second, at most 100 of them.
     recent: Mutex<Vec<(IpAddr, Instant)>>,
+    /// Wakes the email sender when a new subscriber is owed a welcome.
+    wake: tokio::sync::Notify,
 }
 
 /// A post as `GET /api/posts` returns it.
@@ -460,14 +462,17 @@ async fn main() -> anyhow::Result<()> {
         database: Mutex::new(connection),
         captchas: Mutex::new(VecDeque::new()),
         recent: Mutex::new(Vec::new()),
+        wake: tokio::sync::Notify::new(),
     });
 
-    // Post emails. At start, every subscriber is owed each post that has no
+    // Emails. At start, every subscriber is owed each post that has no
     // delivery row for them yet — the posts already out when they subscribed
-    // were marked `skipped` then — and those rows become `pending`. The due
-    // ones go out one at a time, oldest first; a 4xx answer is tried again
-    // after 5 minutes, 30 minutes and 2 hours, anything else is final. With
-    // nothing left pending the task ends: new posts come with a restart.
+    // were marked `skipped` then — and those rows become `pending`; a new
+    // subscriber's welcome is a `pending` row for post -1, made when they
+    // subscribe. The due ones go out one at a time, oldest first; a 4xx answer
+    // is tried again after 5 minutes, 30 minutes and 2 hours, anything else is
+    // final. With nothing due the task waits for a new subscriber or the next
+    // retry: new posts come with a restart.
     let sender = app.clone();
     tokio::spawn(async move {
         let app = sender;
@@ -549,7 +554,7 @@ async fn main() -> anyhow::Result<()> {
                         [],
                         |row| {
                             Ok((
-                                row.get::<_, u32>(0)?,
+                                row.get::<_, i64>(0)?,
                                 row.get::<_, i64>(1)?,
                                 row.get::<_, i64>(2)?,
                                 row.get::<_, i64>(3)?,
@@ -563,33 +568,87 @@ async fn main() -> anyhow::Result<()> {
             let (post, subscriber, attempts, next_at, email) = match due {
                 Ok(Some(due)) => due,
                 Ok(None) => {
-                    tracing::info!(msg = "No post emails pending");
-                    return;
+                    tracing::debug!(msg = "No emails due, waiting for a subscriber");
+                    app.wake.notified().await;
+                    continue;
                 }
                 Err(error) => {
-                    tracing::error!(msg = "Could not read pending post emails", error = %format!("{error:#}"));
+                    tracing::error!(msg = "Could not read pending emails", error = %format!("{error:#}"));
                     return;
                 }
             };
+            // A welcome must not wait behind a retry hours away.
             let wait = next_at - now();
             if wait > 0 {
-                tokio::time::sleep(Duration::from_millis(wait as u64)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(wait as u64)) => {}
+                    _ = app.wake.notified() => {}
+                }
                 continue;
             }
 
-            tracing::debug!(msg = "Sending post email", post = post, email = %email, attempt = attempts + 1);
+            let kind = if post < 0 { "welcome" } else { "post" };
+            tracing::debug!(msg = "Sending email", kind = kind, post = post, email = %email, attempt = attempts + 1);
             // The error and whether it is worth another try (a 4xx answer).
             let outcome: Result<String, (String, bool)> = 'send: {
-                let directory = app.posts.clone();
-                let found =
-                    match tokio::task::spawn_blocking(move || read_post(&directory, post)).await {
+                let (subject, html, text) = if post < 0 {
+                    let channel = format!("{}/", app.url);
+                    let rss = format!("{}/rss.xml", app.url);
+                    let mut title = String::new();
+                    escape(CHANNEL_TITLE, &mut title);
+                    (
+                        format!("{EMAIL_TITLE} · عضو شدید / You're subscribed"),
+                        format!(
+                            "<!doctype html>\n<html><body>\n\
+                             <div dir=\"rtl\" lang=\"fa\">\n\
+                             <p>سلام،<br>\nبه {title} پیوستید. هر پستی که از این پس منتشر شود، به همین نشانی برایتان فرستاده می‌شود.</p>\n\
+                             <p><a href=\"{channel}\">کانال</a> · <a href=\"{CHANNEL_TELEGRAM}\">تلگرام</a> · <a href=\"{rss}\">خوراک RSS</a></p>\n\
+                             </div>\n<hr>\n\
+                             <div dir=\"ltr\" lang=\"en\">\n\
+                             <p>Hi,<br>\nYou're subscribed to {title}. Every new post will come to this address.</p>\n\
+                             <p><a href=\"{channel}\">Channel</a> · <a href=\"{CHANNEL_TELEGRAM}\">Telegram</a> · <a href=\"{rss}\">RSS</a></p>\n\
+                             </div>\n</body></html>\n"
+                        ),
+                        format!(
+                            "سلام،\nبه {CHANNEL_TITLE} پیوستید. هر پستی که از این پس منتشر شود، به همین نشانی برایتان فرستاده می‌شود.\n\n\
+                             کانال: {channel}\nتلگرام: {CHANNEL_TELEGRAM}\nخوراک RSS: {rss}\n\n\
+                             ————————\n\n\
+                             Hi,\nYou're subscribed to {CHANNEL_TITLE}. Every new post will come to this address.\n\n\
+                             Channel: {channel}\nTelegram: {CHANNEL_TELEGRAM}\nRSS: {rss}\n"
+                        ),
+                    )
+                } else {
+                    let directory = app.posts.clone();
+                    let id = post as u32;
+                    let found = match tokio::task::spawn_blocking(move || read_post(&directory, id))
+                        .await
+                    {
                         Ok(Ok(Some(found))) => found,
-                        Ok(Ok(None)) => break 'send Err(("The post is gone".to_string(), false)),
+                        Ok(Ok(None)) => {
+                            break 'send Err(("The post is gone".to_string(), false));
+                        }
                         Ok(Err(error)) => break 'send Err((format!("{error:#}"), false)),
                         Err(error) => {
                             break 'send Err((format!("Post reader panicked: {error}"), false));
                         }
                     };
+                    let subject = if found.sentence.is_empty() {
+                        format!("{EMAIL_TITLE} · {post}")
+                    } else {
+                        format!("{EMAIL_TITLE} · {}", found.sentence)
+                    };
+                    let link = format!("{}/p/{post}", app.url);
+                    // Post links and images are root-relative; a mail client
+                    // needs them whole.
+                    let html = found.html.replace("=\"/", &format!("=\"{}/", app.url));
+                    (
+                        subject,
+                        format!(
+                            "<!doctype html>\n<html><body>\n<div dir=\"auto\">\n{html}</div>\n<p><a href=\"{link}\">View in channel</a></p>\n</body></html>\n"
+                        ),
+                        format!("{}\n\nView in channel: {link}\n", found.text.trim()),
+                    )
+                };
                 let to = match email.parse::<Mailbox>() {
                     Ok(to) => to,
                     Err(error) => break 'send Err((format!("{email}: {error}"), false)),
@@ -600,19 +659,6 @@ async fn main() -> anyhow::Result<()> {
                         break 'send Err((format!("{EMAIL_USER}@{}: {error}", app.host), false));
                     }
                 };
-                let subject = if found.sentence.is_empty() {
-                    format!("{EMAIL_TITLE} · {post}")
-                } else {
-                    format!("{EMAIL_TITLE} · {}", found.sentence)
-                };
-                let link = format!("{}/p/{post}", app.url);
-                // Post links and images are root-relative; a mail client needs
-                // them whole.
-                let html = found.html.replace("=\"/", &format!("=\"{}/", app.url));
-                let html = format!(
-                    "<!doctype html>\n<html><body>\n<div dir=\"auto\">\n{html}</div>\n<p><a href=\"{link}\">View in channel</a></p>\n</body></html>\n"
-                );
-                let text = format!("{}\n\nView in channel: {link}\n", found.text.trim());
                 // Gmail refuses mail without one.
                 let mut message = match Message::builder()
                     .message_id(Some(format!(
@@ -694,7 +740,10 @@ async fn main() -> anyhow::Result<()> {
                             break 'send Err((format!("{host}: {error}"), false));
                         }
                         // This host could not be reached; the next one might be.
-                        Err(error) => last = format!("{host}: {error}"),
+                        Err(error) => {
+                            tracing::warn!(msg = "Could not reach mail host, trying the next", kind = kind, post = post, email = %email, host = %host, error = %error);
+                            last = format!("{host}: {error}");
+                        }
                     }
                 }
                 Err((last, false))
@@ -703,16 +752,16 @@ async fn main() -> anyhow::Result<()> {
             let at = now();
             let (status, next_at, error) = match outcome {
                 Ok(host) => {
-                    tracing::info!(msg = "Sent post email", post = post, email = %email, host = %host);
+                    tracing::info!(msg = "Sent email", kind = kind, post = post, email = %email, host = %host);
                     ("sent", None, None)
                 }
                 Err((error, true)) if attempts < 3 => {
                     let minutes = [5, 30, 120][attempts as usize];
-                    tracing::warn!(msg = "Deferred post email", post = post, email = %email, minutes = minutes, error = %error);
+                    tracing::warn!(msg = "Deferred email", kind = kind, post = post, email = %email, minutes = minutes, error = %error);
                     ("pending", Some(at + minutes * 60_000), Some(error))
                 }
                 Err((error, _)) => {
-                    tracing::error!(msg = "Could not send post email", post = post, email = %email, error = %error);
+                    tracing::error!(msg = "Could not send email", kind = kind, post = post, email = %email, error = %error);
                     ("failed", None, Some(error))
                 }
             };
@@ -727,7 +776,7 @@ async fn main() -> anyhow::Result<()> {
             .await;
             // Going on could send the same email again and again.
             if let Err(error) = recorded {
-                tracing::error!(msg = "Could not record post email, stopped sending", post = post, email = %email, error = %format!("{error:#}"));
+                tracing::error!(msg = "Could not record email, stopped sending", kind = kind, post = post, email = %email, error = %format!("{error:#}"));
                 return;
             }
         }
@@ -1304,9 +1353,10 @@ struct SubscribeError {
 }
 
 /// `POST /api/subscribe`: an email and a solved captcha. `204` whether the
-/// email is new or already subscribed, so nobody can learn who is. Every post
-/// out at this moment is marked `skipped` for the new subscriber; they are
-/// sent the ones that come after.
+/// email is new or already subscribed, so nobody can learn who is. A new
+/// subscriber is sent a welcome at once, and every post out at this moment is
+/// marked `skipped` for them; they are sent the ones that come after. A known
+/// email gets nothing, so the form cannot flood anyone's inbox.
 async fn subscribe(
     State(app): State<Arc<App>>,
     ConnectInfo(socket): ConnectInfo<SocketAddr>,
@@ -1378,6 +1428,12 @@ async fn subscribe(
         )?;
         if added == 1 {
             let subscriber = transaction.last_insert_rowid();
+            // Their welcome, sent at once; post numbers are never negative.
+            transaction.execute(
+                "INSERT INTO delivery (post, subscriber, status, attempts, next_at, error, at)
+                 VALUES (-1, ?1, 'pending', 0, ?2, NULL, ?2)",
+                params![subscriber, at],
+            )?;
             for id in &ids {
                 transaction.execute(
                     "INSERT INTO delivery (post, subscriber, status, attempts, next_at, error, at)
@@ -1393,6 +1449,9 @@ async fn subscribe(
     match result {
         Ok(added) => {
             tracing::info!(msg = "Subscribed", email = %logged, new = added);
+            if added {
+                app.wake.notify_one();
+            }
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => {

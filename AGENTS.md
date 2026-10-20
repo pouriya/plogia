@@ -181,11 +181,20 @@ key    (name PRIMARY KEY, value)                      -- `dkim`: the signing key
   second, and at most 100 addresses in any second; the rest get `429`. The
   email is checked before the captcha, so a typo does not cost one.
 - **Delivery rows**: when someone subscribes, every post out at that moment is
-  marked `skipped` for them, so they get only what comes after. At every start
-  the server gives each subscriber a `pending` row for every parsable post they
-  have none for, then sends the due ones one at a time, oldest first, and stops
-  once none are pending. **New posts are emailed on the next start**, not when
-  their folder appears.
+  marked `skipped` for them, so they get only what comes after, and their
+  welcome is a `pending` row for post `-1` (post numbers are never negative).
+  At every start the server gives each subscriber a `pending` row for every
+  parsable post they have none for. One sender sends the due rows one at a
+  time, oldest first; with none due it waits until a new subscriber or the
+  next retry wakes it. **New posts are emailed on the next start**, not when
+  their folder appears; welcomes go at once.
+- **The welcome**: only to an email that is new; subscribing a known one again
+  sends nothing, so the form cannot flood an inbox. Subject `EMAIL_TITLE · عضو
+  شدید / You're subscribed`; Persian first, then English: a greeting, "به Π
+  پیوستید. هر پستی که از این پس منتشر شود، به همین نشانی برایتان فرستاده
+  می‌شود." / "You're subscribed to Π. Every new post will come to this
+  address.", and named links to the channel, Telegram and RSS (spelled out in
+  the plain-text part).
 - **No relay**: each email goes to the recipient domain's MX hosts (by
   preference; the domain itself without MX records; refused on a null MX) on
   port 25, with opportunistic STARTTLS that accepts any certificate, as mail
@@ -229,7 +238,8 @@ lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN.
   non-member, opens the Join panel (same place and history rules as the
   channel info): avatar, title, subscribers, then the email form with its
   captcha (↻ for a new one), then Telegram and RSS tiles. A successful subscribe
-  shows a toast, closes the panel and sets `plogia.joined` in `localStorage`;
+  shows a toast ("You're in. Check your inbox." / «به کانال پیوستید؛ ایمیلتان
+  را ببینید.»), closes the panel and sets `plogia.joined` in `localStorage`;
   the bar is never shown again in that browser.
 - **Language**: English by default; Persian only when the reader turns on the
   فارسی switch in the channel info, kept in `localStorage` (`plogia.language`).
@@ -299,6 +309,13 @@ Every request logs one event: `Handled request` (2xx/3xx, `info`), `Rejected
 request` (4xx, `warn`) or `Failed request` (5xx, `error`), with
 `http.request.method`, `http.route`, `url.path`, `url.query`,
 `http.response.status_code` and `total_ms`.
+
+Every email logs `Sent email` (`info`, with the `host` that took it),
+`Deferred email` (`warn`, a 4xx, with `minutes` until the retry) or `Could not
+send email` (`error`), each with `kind` (`welcome` or `post`), `post` (`-1` for
+a welcome), `email` and the receiving server's own reply in `error`. A mail
+host that cannot be reached logs `Could not reach mail host, trying the next`
+(`warn`). The same error stays in `delivery.error`.
 
 Every log call starts with a `msg` field whose value begins with a capital
 letter; structured fields follow. `?` for `Debug`, `%` for `Display`.
