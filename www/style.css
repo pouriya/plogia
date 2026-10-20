@@ -269,7 +269,7 @@ main {
   margin-bottom: 2px;
   color: var(--accent);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 700;
 }
 
 .text > :first-child { margin-top: 0; }
@@ -441,8 +441,8 @@ main {
 }
 .icon-button:hover { background: var(--hover); }
 .icon-button svg { width: 24px; height: 24px; fill: currentColor; }
-#info-close .back { display: none; }
-[dir="rtl"] #info-close .back { transform: scaleX(-1); }
+.panel-close .back { display: none; }
+[dir="rtl"] .panel-close .back { transform: scaleX(-1); }
 .info-head {
   display: flex;
   flex-direction: column;
@@ -497,10 +497,149 @@ button.info-row:hover { background: var(--hover); }
 .info-row p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
 .info-row span { color: var(--muted); font-size: 13px; }
 
+/* The channel's links as tiles, logo over title, in one line. */
+.cards {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-bottom: 8px solid var(--divider);
+}
+.cards:last-child { border-bottom: 0; }
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 4px 10px;
+  border: 0;
+  border-radius: 14px;
+  color: inherit;
+  background: var(--divider);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+.card:hover { background: linear-gradient(var(--hover), var(--hover)), var(--divider); }
+.card svg { width: 28px; height: 28px; fill: var(--accent); }
+.card.telegram svg { fill: #2aabee; }
+.card.rss svg { fill: #f26522; }
+.card.github svg { fill: currentColor; }
+.card span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The language row's on/off switch, Telegram's: Persian when on. */
+.switch {
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 14px;
+  margin-inline-start: auto;
+  border-radius: 7px;
+  background: var(--muted);
+  transition: background 0.15s;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  inset-inline-start: -2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: inset-inline-start 0.15s;
+}
+[aria-checked="true"] .switch { background: var(--accent); }
+[aria-checked="true"] .switch::after { inset-inline-start: 16px; }
+
+/* Join: where Telegram puts its JOIN CHANNEL bar for someone not in the
+   channel yet, under the feed. Gone once they have subscribed. */
+.join {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  z-index: 6;
+  width: calc(min(720px, 100%) - 24px);
+  height: 52px;
+  margin: 0 auto;
+  border: 0;
+  border-radius: 12px;
+  color: var(--accent);
+  background: var(--panel);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  font: inherit;
+  font-weight: 700;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.join:hover { background: linear-gradient(var(--hover), var(--hover)), var(--panel); }
+.join[hidden] { display: none; }
+.can-join main { padding-bottom: 80px; }
+.can-join .down { bottom: 76px; }
+.can-join .toast { bottom: 140px; }
+
+.join-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px 20px;
+  border-bottom: 8px solid var(--divider);
+}
+.join-lead {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin: 0 0 4px;
+  font-weight: 500;
+}
+.join-lead svg { flex: none; width: 24px; height: 24px; fill: var(--muted); }
+.join-form input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--muted);
+  border-radius: 10px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  text-align: start;
+}
+.join-form input::placeholder { color: var(--muted); }
+.join-form input:focus { outline: none; border-color: var(--accent); }
+.captcha { display: flex; align-items: center; gap: 8px; }
+.captcha img {
+  width: 220px;
+  max-width: calc(100% - 48px);
+  height: auto;
+  aspect-ratio: 220 / 120;
+  border-radius: 10px;
+  background: #fff;
+}
+.join-error { margin: 0; color: #e53935; font-size: 14px; }
+.join-error[hidden] { display: none; }
+.join-submit {
+  padding: 11px;
+  border: 0;
+  border-radius: 10px;
+  color: #fff;
+  background: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.join-submit:disabled { opacity: 0.6; cursor: default; }
+
 @media (min-width: 1000px) {
   .info-open { padding-inline-end: 360px; }
   .info-open .top { inset-inline-end: 360px; }
   .info-open .down { inset-inline-end: calc(360px + max(16px, 50vw - 524px)); }
+  .info-open .join { inset-inline-end: 360px; width: calc(min(720px, 100% - 360px) - 24px); }
   .info, [dir="rtl"] .info { box-shadow: none; border-inline-start: 1px solid var(--divider); }
 }
 
@@ -553,6 +692,6 @@ button.info-row:hover { background: var(--hover); }
   .post > .avatar { display: none; }
   .bubble { margin-inline-start: 8px; }
   .info, [dir="rtl"] .info { width: 100%; box-shadow: none; }
-  #info-close .x { display: none; }
-  #info-close .back { display: block; }
+  .panel-close .x { display: none; }
+  .panel-close .back { display: block; }
 }

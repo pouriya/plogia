@@ -21,6 +21,10 @@ LABEL "org.opencontainers.image.title"="plogia"
 LABEL "org.opencontainers.image.description"="A blog that looks and reads like a Telegram channel, with view counts"
 LABEL "org.opencontainers.image.version"="${PLOGIA_VERSION}"
 
+# The sqlite3 shell, to look into the database from inside the container:
+# `docker exec -it <container> sqlite3 /var/lib/plogia/plogia.db`.
+RUN apk add --no-cache sqlite
+
 # The front end and the posts are baked in: publishing a post is building a
 # new image. The database is the only state, and lives in the volume.
 COPY --from=builder /plogia/build/plogia /usr/local/bin/plogia

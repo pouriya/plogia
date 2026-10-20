@@ -4,16 +4,18 @@
 //! `--posts` for the posts — and nothing about either is kept in memory, so
 //! publishing is writing a file. SQLite (`--db`) holds who came and what they
 //! read: one row per device, per visit and per view, and a per-day counter of
-//! robots turned away.
+//! robots turned away. It also keeps the email subscribers, what post went to
+//! whom, and the DKIM key the emails are signed with: each post is sent
+//! straight to every subscriber's mail server, no relay in between.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fmt,
     fmt::Write,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path as FilePath, PathBuf},
     sync::{Arc, Mutex},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, bail};
@@ -27,7 +29,24 @@ use axum::{
     routing::{get, post},
 };
 use clap::Parser;
+use hickory_resolver::{TokioResolver, proto::rr::RData};
+use lettre::{
+    Address, AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    message::{
+        Mailbox, MultiPart,
+        dkim::{DkimConfig, DkimSigningAlgorithm, DkimSigningKey},
+    },
+    transport::smtp::{
+        client::{Tls, TlsParameters},
+        extension::ClientId,
+    },
+};
 use pulldown_cmark::{CowStr, Event, Options, Tag, TagEnd};
+use rsa::{
+    RsaPrivateKey, RsaPublicKey,
+    pkcs1::{DecodeRsaPrivateKey, EncodeRsaPrivateKey},
+    pkcs8::{EncodePublicKey, LineEnding},
+};
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use tower_http::{
@@ -46,6 +65,23 @@ const CHANNEL_DESCRIPTION: &str = "گفته‌های پوریا";
 /// A path under `--www`: the avatar in the header, beside every post and in
 /// the channel info. Link previews carry no image at all.
 const CHANNEL_AVATAR: &str = "/plogia.jpg";
+
+/// The same channel on Telegram, for readers who would rather follow it there:
+/// on the Join panel and in the channel info.
+const CHANNEL_TELEGRAM: &str = "https://t.me/plogia";
+
+/// This code, in the channel info.
+const CHANNEL_GITHUB: &str = "https://github.com/pouriya/plogia";
+
+/// Every post email's subject opens with this, then ` · ` and the post's first
+/// sentence, so a subscriber finds them all with one search.
+const EMAIL_TITLE: &str = CHANNEL_DESCRIPTION;
+
+/// Post emails come from `CHANNEL_TITLE <EMAIL_USER@host of --url>`.
+const EMAIL_USER: &str = "noreply";
+
+/// The DKIM key is published at `<DKIM_SELECTOR>._domainkey.<host of --url>`.
+const DKIM_SELECTOR: &str = "plogia";
 
 /// The zone of every post's `date`, which is written without one: the
 /// author's wall clock. Only used for `article:published_time`.
@@ -106,10 +142,16 @@ struct CommandLine {
     #[arg(long, value_name = "DIRECTORY")]
     posts: PathBuf,
 
-    /// SQLite database for devices, visits, views and robot counters. Created
-    /// if missing.
+    /// SQLite database for devices, visits, views, robot counters,
+    /// subscribers, deliveries and the DKIM key. Created if missing.
     #[arg(long, value_name = "FILE")]
     db: PathBuf,
+
+    /// Where readers reach the channel, like `https://plogia.ir`: link
+    /// previews, the RSS feed and post emails link there. Its host is also the
+    /// domain emails are sent from and signed for.
+    #[arg(long, value_name = "URL")]
+    url: String,
 
     /// TCP port to listen on, on every interface.
     #[arg(long)]
@@ -131,7 +173,16 @@ struct CommandLine {
 struct App {
     www: PathBuf,
     posts: PathBuf,
+    /// `--url` without a trailing `/`.
+    url: String,
+    /// The host of `--url`, without a port.
+    host: String,
     database: Mutex<Connection>,
+    /// Captchas shown and not yet answered: id, answer, when made. At most
+    /// 1000, oldest first; each is good for 10 minutes and one try.
+    captchas: Mutex<VecDeque<(String, String, Instant)>>,
+    /// Who was given a captcha in the last second, at most 100 of them.
+    recent: Mutex<Vec<(IpAddr, Instant)>>,
 }
 
 /// A post as `GET /api/posts` returns it.
@@ -148,6 +199,9 @@ struct Post {
     /// Plain text after the first sentence, its description.
     #[serde(skip)]
     excerpt: String,
+    /// The whole post as plain text, the text part of its email.
+    #[serde(skip)]
+    text: String,
 }
 
 /// 48 bits of Unix milliseconds then 80 random bits, big-endian, written as 26
@@ -249,6 +303,23 @@ async fn main() -> anyhow::Result<()> {
     if !settings.posts.is_dir() {
         bail!("--posts {} is not a directory", settings.posts.display());
     }
+    let url = settings.url.trim_end_matches('/').to_string();
+    let host = match url.split_once("://") {
+        Some(("http" | "https", rest)) => {
+            let authority = match rest.split_once('/') {
+                Some((authority, _)) => authority,
+                None => rest,
+            };
+            match authority.rsplit_once(':') {
+                Some((name, port)) if port.parse::<u16>().is_ok() => name.to_string(),
+                _ => authority.to_string(),
+            }
+        }
+        _ => bail!("--url {} must start with http:// or https://", settings.url),
+    };
+    if host.is_empty() {
+        bail!("--url {} has no host", settings.url);
+    }
 
     let connection = Connection::open(&settings.db)
         .with_context(|| format!("Could not open --db {}", settings.db.display()))?;
@@ -289,20 +360,377 @@ async fn main() -> anyhow::Result<()> {
              CREATE INDEX IF NOT EXISTS view_post ON view (post, at);
 
              -- Requests refused as robots, counted per UTC day and per kind:
-             -- `page`, `visit` or `view`. Nothing else about them is kept.
+             -- `page`, `visit`, `view`, `captcha` or `subscribe`. Nothing else
+             -- about them is kept.
              CREATE TABLE IF NOT EXISTS robot (
                  day TEXT NOT NULL,
                  kind TEXT NOT NULL,
                  dropped INTEGER NOT NULL,
                  PRIMARY KEY (day, kind)
+             ) WITHOUT ROWID;
+
+             -- One row per email given on the Join panel, kept as first typed.
+             -- No confirmation and no removal yet.
+             CREATE TABLE IF NOT EXISTS subscriber (
+                 id INTEGER PRIMARY KEY,
+                 email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                 ip TEXT NOT NULL,
+                 at INTEGER NOT NULL
+             );
+
+             -- What post went to whom. `skipped`: the post was already out
+             -- when they subscribed. `pending`: owed, due at `next_at`.
+             -- `sent`, or `failed` with its `error`: done, never tried again.
+             -- `at` is the last change.
+             CREATE TABLE IF NOT EXISTS delivery (
+                 post INTEGER NOT NULL,
+                 subscriber INTEGER NOT NULL REFERENCES subscriber (id),
+                 status TEXT NOT NULL,
+                 attempts INTEGER NOT NULL,
+                 next_at INTEGER,
+                 error TEXT,
+                 at INTEGER NOT NULL,
+                 PRIMARY KEY (post, subscriber)
+             ) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS delivery_due ON delivery (status, next_at);
+
+             -- Secrets made on first start: `dkim`, the PEM of the key every
+             -- email is signed with.
+             CREATE TABLE IF NOT EXISTS key (
+                 name TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
              ) WITHOUT ROWID;",
         )
         .with_context(|| format!("Could not set up the schema in {}", settings.db.display()))?;
 
+    // The DKIM key is made once and kept, since its public half is published
+    // in DNS; that record is logged at every start, for whoever sets DNS up.
+    let stored: Option<String> = connection
+        .query_row("SELECT value FROM key WHERE name = 'dkim'", [], |row| {
+            row.get(0)
+        })
+        .optional()
+        .context("Could not read the DKIM key")?;
+    let (private, pem) = match stored {
+        Some(pem) => {
+            let private = RsaPrivateKey::from_pkcs1_pem(&pem)
+                .context("The stored DKIM key is not an RSA key")?;
+            (private, pem)
+        }
+        None => {
+            tracing::info!(msg = "Generating the DKIM key", bits = 2048);
+            let private = RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048)
+                .context("Could not generate the DKIM key")?;
+            let pem = private
+                .to_pkcs1_pem(LineEnding::LF)
+                .context("Could not write the DKIM key")?
+                .to_string();
+            connection
+                .execute("INSERT INTO key (name, value) VALUES ('dkim', ?1)", [&pem])
+                .context("Could not store the DKIM key")?;
+            (private, pem)
+        }
+    };
+    let public = RsaPublicKey::from(&private)
+        .to_public_key_pem(LineEnding::LF)
+        .context("Could not write the DKIM public key")?;
+    let mut record = String::new();
+    for line in public.lines() {
+        if !line.starts_with("-----") {
+            record.push_str(line);
+        }
+    }
+    tracing::info!(
+        msg = "Publish this DKIM record",
+        name = %format!("{DKIM_SELECTOR}._domainkey.{host}"),
+        r#type = "TXT",
+        value = %format!("v=DKIM1; k=rsa; p={record}"),
+    );
+    let signing = match DkimSigningKey::new(&pem, DkimSigningAlgorithm::Rsa) {
+        Ok(signing) => signing,
+        Err(error) => bail!("Could not load the DKIM key: {error:?}"),
+    };
+    let dkim = DkimConfig::default_config(DKIM_SELECTOR.to_string(), host.clone(), signing);
+
     let app = Arc::new(App {
         www: settings.www.clone(),
         posts: settings.posts.clone(),
+        url,
+        host,
         database: Mutex::new(connection),
+        captchas: Mutex::new(VecDeque::new()),
+        recent: Mutex::new(Vec::new()),
+    });
+
+    // Post emails. At start, every subscriber is owed each post that has no
+    // delivery row for them yet — the posts already out when they subscribed
+    // were marked `skipped` then — and those rows become `pending`. The due
+    // ones go out one at a time, oldest first; a 4xx answer is tried again
+    // after 5 minutes, 30 minutes and 2 hours, anything else is final. With
+    // nothing left pending the task ends: new posts come with a restart.
+    let sender = app.clone();
+    tokio::spawn(async move {
+        let app = sender;
+        let directory = app.posts.clone();
+        let listed = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u32>> {
+            let mut ready = Vec::new();
+            for id in post_ids(&directory)? {
+                // Not sent while it does not parse; fixed, it goes out on the
+                // next start.
+                match read_post(&directory, id) {
+                    Ok(Some(_)) => ready.push(id),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::error!(msg = "Skipped unreadable post", post = id, error = %format!("{error:#}"));
+                    }
+                }
+            }
+            Ok(ready)
+        })
+        .await;
+        let ids = match listed {
+            Ok(Ok(ids)) => ids,
+            Ok(Err(error)) => {
+                tracing::error!(msg = "Could not list posts to email", error = %format!("{error:#}"));
+                return;
+            }
+            Err(error) => {
+                tracing::error!(msg = "Posts reader panicked", error = %error);
+                return;
+            }
+        };
+        let queued = database(&app, move |connection| {
+            let transaction = connection.unchecked_transaction()?;
+            let at = now();
+            let mut queued = 0;
+            for id in &ids {
+                queued += transaction.execute(
+                    "INSERT OR IGNORE INTO delivery (post, subscriber, status, attempts, next_at, error, at)
+                     SELECT ?1, id, 'pending', 0, ?2, NULL, ?2 FROM subscriber",
+                    params![id, at],
+                )?;
+            }
+            transaction.commit()?;
+            Ok(queued)
+        })
+        .await;
+        match queued {
+            Ok(queued) => tracing::info!(msg = "Queued post emails", emails = queued),
+            Err(error) => {
+                tracing::error!(msg = "Could not queue post emails", error = %format!("{error:#}"));
+                return;
+            }
+        }
+
+        let resolver = match TokioResolver::builder_tokio() {
+            Ok(builder) => match builder.build() {
+                Ok(resolver) => resolver,
+                Err(error) => {
+                    tracing::error!(msg = "Could not set up DNS", error = %error);
+                    return;
+                }
+            },
+            Err(error) => {
+                tracing::error!(msg = "Could not read the DNS configuration", error = %error);
+                return;
+            }
+        };
+
+        loop {
+            let due = database(&app, |connection| {
+                connection
+                    .query_row(
+                        "SELECT delivery.post, delivery.subscriber, delivery.attempts,
+                                delivery.next_at, subscriber.email
+                         FROM delivery JOIN subscriber ON subscriber.id = delivery.subscriber
+                         WHERE delivery.status = 'pending'
+                         ORDER BY delivery.next_at, delivery.post
+                         LIMIT 1",
+                        [],
+                        |row| {
+                            Ok((
+                                row.get::<_, u32>(0)?,
+                                row.get::<_, i64>(1)?,
+                                row.get::<_, i64>(2)?,
+                                row.get::<_, i64>(3)?,
+                                row.get::<_, String>(4)?,
+                            ))
+                        },
+                    )
+                    .optional()
+            })
+            .await;
+            let (post, subscriber, attempts, next_at, email) = match due {
+                Ok(Some(due)) => due,
+                Ok(None) => {
+                    tracing::info!(msg = "No post emails pending");
+                    return;
+                }
+                Err(error) => {
+                    tracing::error!(msg = "Could not read pending post emails", error = %format!("{error:#}"));
+                    return;
+                }
+            };
+            let wait = next_at - now();
+            if wait > 0 {
+                tokio::time::sleep(Duration::from_millis(wait as u64)).await;
+                continue;
+            }
+
+            tracing::debug!(msg = "Sending post email", post = post, email = %email, attempt = attempts + 1);
+            // The error and whether it is worth another try (a 4xx answer).
+            let outcome: Result<String, (String, bool)> = 'send: {
+                let directory = app.posts.clone();
+                let found =
+                    match tokio::task::spawn_blocking(move || read_post(&directory, post)).await {
+                        Ok(Ok(Some(found))) => found,
+                        Ok(Ok(None)) => break 'send Err(("The post is gone".to_string(), false)),
+                        Ok(Err(error)) => break 'send Err((format!("{error:#}"), false)),
+                        Err(error) => {
+                            break 'send Err((format!("Post reader panicked: {error}"), false));
+                        }
+                    };
+                let to = match email.parse::<Mailbox>() {
+                    Ok(to) => to,
+                    Err(error) => break 'send Err((format!("{email}: {error}"), false)),
+                };
+                let from = match Address::new(EMAIL_USER, &app.host) {
+                    Ok(address) => Mailbox::new(Some(CHANNEL_TITLE.to_string()), address),
+                    Err(error) => {
+                        break 'send Err((format!("{EMAIL_USER}@{}: {error}", app.host), false));
+                    }
+                };
+                let subject = if found.sentence.is_empty() {
+                    format!("{EMAIL_TITLE} · {post}")
+                } else {
+                    format!("{EMAIL_TITLE} · {}", found.sentence)
+                };
+                let link = format!("{}/p/{post}", app.url);
+                // Post links and images are root-relative; a mail client needs
+                // them whole.
+                let html = found.html.replace("=\"/", &format!("=\"{}/", app.url));
+                let html = format!(
+                    "<!doctype html>\n<html><body>\n<div dir=\"auto\">\n{html}</div>\n<p><a href=\"{link}\">View in channel</a></p>\n</body></html>\n"
+                );
+                let text = format!("{}\n\nView in channel: {link}\n", found.text.trim());
+                // Gmail refuses mail without one.
+                let mut message = match Message::builder()
+                    .message_id(Some(format!(
+                        "<{post}.{subscriber}.{}@{}>",
+                        now(),
+                        app.host
+                    )))
+                    .from(from)
+                    .to(to.clone())
+                    .subject(subject)
+                    .multipart(MultiPart::alternative_plain_html(text, html))
+                {
+                    Ok(message) => message,
+                    Err(error) => break 'send Err((error.to_string(), false)),
+                };
+                message.sign(&dkim);
+
+                // The domain's MX hosts, most preferred first. A domain with
+                // none takes its mail itself (RFC 5321 §5.1); a single `.`
+                // says it takes none (RFC 7505).
+                let domain = to.email.domain().to_string();
+                let mut hosts = Vec::new();
+                match resolver.mx_lookup(format!("{domain}.")).await {
+                    Ok(lookup) => {
+                        let mut exchanges = Vec::new();
+                        for record in lookup.answers() {
+                            if let RData::MX(mx) = &record.data {
+                                exchanges.push((mx.preference, mx.exchange.to_ascii()));
+                            }
+                        }
+                        exchanges.sort();
+                        for (_, exchange) in exchanges {
+                            hosts.push(exchange.trim_end_matches('.').to_string());
+                        }
+                    }
+                    Err(error) if error.is_no_records_found() => {}
+                    Err(error) => {
+                        break 'send Err((
+                            format!("Could not look up the MX of {domain}: {error}"),
+                            false,
+                        ));
+                    }
+                }
+                if hosts.is_empty() {
+                    hosts.push(domain.clone());
+                }
+                if hosts.contains(&String::new()) {
+                    break 'send Err((format!("{domain} accepts no email"), false));
+                }
+
+                let bytes = message.formatted();
+                let mut last = String::new();
+                for host in &hosts {
+                    // Encrypted whenever the server offers STARTTLS, with any
+                    // certificate, as mail servers do among themselves; plain
+                    // when it does not.
+                    let tls = match TlsParameters::builder(host.clone())
+                        .dangerous_accept_invalid_certs(true)
+                        .dangerous_accept_invalid_hostnames(true)
+                        .build()
+                    {
+                        Ok(tls) => tls,
+                        Err(error) => break 'send Err((format!("{host}: {error}"), false)),
+                    };
+                    let transport =
+                        AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host.as_str())
+                            .port(25)
+                            .hello_name(ClientId::Domain(app.host.clone()))
+                            .tls(Tls::Opportunistic(tls))
+                            .timeout(Some(Duration::from_secs(60)))
+                            .build();
+                    match transport.send_raw(message.envelope(), &bytes).await {
+                        Ok(_) => break 'send Ok(host.clone()),
+                        // The domain answered; its other hosts would say the same.
+                        Err(error) if error.is_transient() => {
+                            break 'send Err((format!("{host}: {error}"), true));
+                        }
+                        Err(error) if error.is_permanent() => {
+                            break 'send Err((format!("{host}: {error}"), false));
+                        }
+                        // This host could not be reached; the next one might be.
+                        Err(error) => last = format!("{host}: {error}"),
+                    }
+                }
+                Err((last, false))
+            };
+
+            let at = now();
+            let (status, next_at, error) = match outcome {
+                Ok(host) => {
+                    tracing::info!(msg = "Sent post email", post = post, email = %email, host = %host);
+                    ("sent", None, None)
+                }
+                Err((error, true)) if attempts < 3 => {
+                    let minutes = [5, 30, 120][attempts as usize];
+                    tracing::warn!(msg = "Deferred post email", post = post, email = %email, minutes = minutes, error = %error);
+                    ("pending", Some(at + minutes * 60_000), Some(error))
+                }
+                Err((error, _)) => {
+                    tracing::error!(msg = "Could not send post email", post = post, email = %email, error = %error);
+                    ("failed", None, Some(error))
+                }
+            };
+            let recorded = database(&app, move |connection| {
+                connection.execute(
+                    "UPDATE delivery
+                     SET status = ?1, attempts = attempts + 1, next_at = ?2, error = ?3, at = ?4
+                     WHERE post = ?5 AND subscriber = ?6",
+                    params![status, next_at, error, at, post, subscriber],
+                )
+            })
+            .await;
+            // Going on could send the same email again and again.
+            if let Err(error) = recorded {
+                tracing::error!(msg = "Could not record post email, stopped sending", post = post, email = %email, error = %format!("{error:#}"));
+                return;
+            }
+        }
     });
 
     let router = Router::new()
@@ -313,6 +741,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/visit", post(visit))
         .route("/api/posts", get(posts))
         .route("/api/views", post(views))
+        .route("/api/captcha", get(captcha))
+        .route("/api/subscribe", post(subscribe))
+        .route("/rss.xml", get(rss))
         .fallback_service(ServeDir::new(&settings.www))
         // Revalidate everything: ServeDir answers with Last-Modified, so an
         // unchanged file costs a 304, and a changed one shows up on the next
@@ -418,50 +849,14 @@ async fn page(
         }
     }
 
-    // Link previews need absolute URLs, and behind a proxy the scheme and host
-    // the visitor used are only in the forwarding headers.
-    let mut scheme = None;
-    let mut host = None;
-    if let Some(forwarded) = header_text(&headers, "forwarded")
-        && let Some(first) = forwarded.split(',').next()
-    {
-        for pair in first.split(';') {
-            if let Some((key, value)) = pair.trim().split_once('=') {
-                let value = value.trim_matches('"').to_string();
-                if key.eq_ignore_ascii_case("proto") {
-                    scheme = Some(value);
-                } else if key.eq_ignore_ascii_case("host") {
-                    host = Some(value);
-                }
-            }
-        }
-    }
-    if scheme.is_none()
-        && let Some(value) = header_text(&headers, "x-forwarded-proto")
-        && let Some(first) = value.split(',').next()
-    {
-        scheme = Some(first.trim().to_string());
-    }
-    if host.is_none()
-        && let Some(value) = header_text(&headers, "x-forwarded-host")
-        && let Some(first) = value.split(',').next()
-    {
-        host = Some(first.trim().to_string());
-    }
-    if host.is_none() {
-        host = header_text(&headers, "host");
-    }
-    let origin = match (scheme, host) {
-        (Some(scheme), Some(host)) => format!("{scheme}://{host}"),
-        (None, Some(host)) => format!("http://{host}"),
-        (_, None) => String::new(),
-    };
-    let url = format!("{origin}{path}");
+    let url = format!("{}{path}", app.url);
 
     let values = [
         ("channel_title", CHANNEL_TITLE),
         ("channel_description", CHANNEL_DESCRIPTION),
         ("channel_avatar", CHANNEL_AVATAR),
+        ("telegram", CHANNEL_TELEGRAM),
+        ("github", CHANNEL_GITHUB),
         ("title", title.as_str()),
         ("description", description.as_str()),
         ("type", kind),
@@ -489,18 +884,7 @@ async fn page(
             }
         }
         match value {
-            Some(value) => {
-                for character in value.chars() {
-                    match character {
-                        '&' => html.push_str("&amp;"),
-                        '<' => html.push_str("&lt;"),
-                        '>' => html.push_str("&gt;"),
-                        '"' => html.push_str("&quot;"),
-                        '\'' => html.push_str("&#39;"),
-                        other => html.push(other),
-                    }
-                }
-            }
+            Some(value) => escape(value, &mut html),
             None => html.push_str(&rest[start..start + 2 + end + 2]),
         }
         rest = &after[end + 2..];
@@ -552,7 +936,7 @@ struct VisitRequest {
 #[derive(Serialize)]
 struct VisitResponse {
     device: String,
-    /// Every device ever issued, shown as the channel's subscriber count.
+    /// Every email subscribed, the channel's subscriber count.
     subscribers: u64,
 }
 
@@ -569,51 +953,7 @@ async fn visit(
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    // The right-most entry of each header is the one our own proxy appended,
-    // which the client cannot forge; anything to its left can be.
-    let mut ip = None;
-    if let Some(forwarded) = header_text(&headers, "forwarded")
-        && let Some(last) = forwarded.rsplit(',').next()
-    {
-        for pair in last.split(';') {
-            if let Some((key, value)) = pair.trim().split_once('=')
-                && key.eq_ignore_ascii_case("for")
-            {
-                // `for="[2001:db8::1]:4711"`, `for=192.0.2.1:80` or bare.
-                let value = value.trim_matches('"');
-                let value = match value.strip_prefix('[') {
-                    Some(bracketed) => match bracketed.split_once(']') {
-                        Some((inside, _)) => inside,
-                        None => bracketed,
-                    },
-                    None => match value.split_once(':') {
-                        Some((address, _)) if !value[address.len() + 1..].contains(':') => address,
-                        _ => value,
-                    },
-                };
-                if let Ok(parsed) = value.parse::<IpAddr>() {
-                    ip = Some(parsed);
-                }
-            }
-        }
-    }
-    if ip.is_none()
-        && let Some(value) = header_text(&headers, "x-forwarded-for")
-        && let Some(last) = value.rsplit(',').next()
-        && let Ok(parsed) = last.trim().parse::<IpAddr>()
-    {
-        ip = Some(parsed);
-    }
-    if ip.is_none()
-        && let Some(value) = header_text(&headers, "x-real-ip")
-        && let Ok(parsed) = value.trim().parse::<IpAddr>()
-    {
-        ip = Some(parsed);
-    }
-    let ip = match ip {
-        Some(ip) => ip,
-        None => socket.ip(),
-    };
+    let ip = client_ip(&headers, socket);
 
     let user_agent = match header_text(&headers, "user-agent") {
         Some(agent) => clip(&agent),
@@ -676,7 +1016,7 @@ async fn visit(
             ],
         )?;
         let subscribers: i64 =
-            transaction.query_row("SELECT count(*) FROM device", [], |row| row.get(0))?;
+            transaction.query_row("SELECT count(*) FROM subscriber", [], |row| row.get(0))?;
         transaction.commit()?;
         Ok((device, subscribers))
     })
@@ -722,22 +1062,7 @@ struct PostsResponse {
 async fn posts(State(app): State<Arc<App>>, Query(query): Query<PostsQuery>) -> Response {
     let directory = app.posts.clone();
     let read = tokio::task::spawn_blocking(move || -> anyhow::Result<PostsResponse> {
-        let mut ids = Vec::new();
-        let entries = std::fs::read_dir(&directory)
-            .with_context(|| format!("Could not list {}", directory.display()))?;
-        for entry in entries {
-            let entry = entry?;
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            if let Ok(id) = name.parse::<u32>()
-                && entry.path().join("post.md").is_file()
-            {
-                ids.push(id);
-            }
-        }
-        ids.sort_unstable();
+        let ids = post_ids(&directory)?;
 
         let (start, end) = if let Some(before) = query.before {
             let end = ids.partition_point(|id| *id < before);
@@ -874,6 +1199,291 @@ async fn views(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+#[derive(Serialize)]
+struct CaptchaResponse {
+    /// What `POST /api/subscribe` names this captcha by.
+    id: String,
+    /// A `data:image/png;base64,…` URL of the picture.
+    image: String,
+}
+
+/// `GET /api/captcha`: a new picture of characters for the Join panel. One per
+/// client address per second, for at most 100 addresses in that second; the
+/// rest get a `429` and come back a second later.
+async fn captcha(
+    State(app): State<Arc<App>>,
+    ConnectInfo(socket): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if robot(&app, &headers, "captcha").await {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    let ip = client_ip(&headers, socket);
+    let mut allowed = true;
+    {
+        let mut recent = match app.recent.lock() {
+            Ok(recent) => recent,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let started = Instant::now();
+        recent.retain(|(_, at)| started.duration_since(*at) < Duration::from_secs(1));
+        for (seen, _) in recent.iter() {
+            if *seen == ip {
+                allowed = false;
+            }
+        }
+        if recent.len() >= 100 {
+            allowed = false;
+        }
+        if allowed {
+            recent.push((ip, started));
+        }
+    }
+    if !allowed {
+        return (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "1")]).into_response();
+    }
+
+    let made = tokio::task::spawn_blocking(|| {
+        let made = captcha::by_name(captcha::Difficulty::Easy, captcha::CaptchaName::Lucy);
+        (made.chars_as_string(), made.as_base64())
+    })
+    .await;
+    let (answer, image) = match made {
+        Ok((answer, Some(image))) => (answer, image),
+        Ok((_, None)) => {
+            tracing::error!(msg = "Could not draw a captcha");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Err(error) => {
+            tracing::error!(msg = "Captcha maker panicked", error = %error);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let id = match Ulid::new() {
+        Ok(id) => id.to_string(),
+        Err(error) => {
+            tracing::error!(msg = "Could not make a captcha id", error = %error);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    tracing::trace!(msg = "Made captcha", id = %id, ip = %ip);
+    {
+        let mut captchas = match app.captchas.lock() {
+            Ok(captchas) => captchas,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let made = Instant::now();
+        captchas.retain(|(_, _, at)| made.duration_since(*at) < Duration::from_secs(600));
+        if captchas.len() >= 1000 {
+            captchas.pop_front();
+        }
+        captchas.push_back((id.clone(), answer, made));
+    }
+    Json(CaptchaResponse {
+        id,
+        image: format!("data:image/png;base64,{image}"),
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+struct SubscribeRequest {
+    email: String,
+    /// The id from `GET /api/captcha`.
+    captcha: String,
+    /// What the reader read in its picture.
+    answer: String,
+}
+
+#[derive(Serialize)]
+struct SubscribeError {
+    /// `email` or `captcha`: which field to fix.
+    error: &'static str,
+}
+
+/// `POST /api/subscribe`: an email and a solved captcha. `204` whether the
+/// email is new or already subscribed, so nobody can learn who is. Every post
+/// out at this moment is marked `skipped` for the new subscriber; they are
+/// sent the ones that come after.
+async fn subscribe(
+    State(app): State<Arc<App>>,
+    ConnectInfo(socket): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<SubscribeRequest>,
+) -> Response {
+    if robot(&app, &headers, "subscribe").await {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    // Checked before the captcha, which a typo should not cost.
+    let email = body.email.trim().to_string();
+    if email.len() > 254 || email.parse::<Address>().is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SubscribeError { error: "email" }),
+        )
+            .into_response();
+    }
+    let mut solved = false;
+    {
+        let mut captchas = match app.captchas.lock() {
+            Ok(captchas) => captchas,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let checked = Instant::now();
+        captchas.retain(|(_, _, at)| checked.duration_since(*at) < Duration::from_secs(600));
+        let mut found = None;
+        for (index, (id, _, _)) in captchas.iter().enumerate() {
+            if *id == body.captcha {
+                found = Some(index);
+            }
+        }
+        // One try: right or wrong, it is gone.
+        if let Some(index) = found
+            && let Some((_, answer, _)) = captchas.remove(index)
+        {
+            solved = answer.eq_ignore_ascii_case(body.answer.trim());
+        }
+    }
+    if !solved {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(SubscribeError { error: "captcha" }),
+        )
+            .into_response();
+    }
+
+    let ip = client_ip(&headers, socket).to_string();
+    let directory = app.posts.clone();
+    let ids = match tokio::task::spawn_blocking(move || post_ids(&directory)).await {
+        Ok(Ok(ids)) => ids,
+        Ok(Err(error)) => {
+            tracing::error!(msg = "Could not list posts", error = %format!("{error:#}"));
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Err(error) => {
+            tracing::error!(msg = "Posts reader panicked", error = %error);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let logged = email.clone();
+    let result = database(&app, move |connection| {
+        let transaction = connection.unchecked_transaction()?;
+        let at = now();
+        let added = transaction.execute(
+            "INSERT INTO subscriber (email, ip, at) VALUES (?1, ?2, ?3)
+             ON CONFLICT (email) DO NOTHING",
+            params![email, ip, at],
+        )?;
+        if added == 1 {
+            let subscriber = transaction.last_insert_rowid();
+            for id in &ids {
+                transaction.execute(
+                    "INSERT INTO delivery (post, subscriber, status, attempts, next_at, error, at)
+                     VALUES (?1, ?2, 'skipped', 0, NULL, NULL, ?3)",
+                    params![id, subscriber, at],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        Ok(added == 1)
+    })
+    .await;
+    match result {
+        Ok(added) => {
+            tracing::info!(msg = "Subscribed", email = %logged, new = added);
+            StatusCode::NO_CONTENT.into_response()
+        }
+        Err(error) => {
+            tracing::error!(msg = "Could not subscribe", email = %logged, error = %format!("{error:#}"));
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// `GET /rss.xml`: the newest [`PAGE_SIZE`] posts, newest first, each whole as
+/// HTML with absolute links. Feed readers are not counted as robots here.
+async fn rss(State(app): State<Arc<App>>) -> Response {
+    let directory = app.posts.clone();
+    let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Post>> {
+        let ids = post_ids(&directory)?;
+        let mut posts = Vec::new();
+        for id in ids[ids.len().saturating_sub(PAGE_SIZE)..].iter().rev() {
+            match read_post(&directory, *id) {
+                Ok(Some(post)) => posts.push(post),
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::error!(msg = "Skipped unreadable post", post = id, error = %format!("{error:#}"));
+                }
+            }
+        }
+        Ok(posts)
+    })
+    .await;
+    let posts = match read {
+        Ok(Ok(posts)) => posts,
+        Ok(Err(error)) => {
+            tracing::error!(msg = "Could not read posts", error = %format!("{error:#}"));
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+        Err(error) => {
+            tracing::error!(msg = "Posts reader panicked", error = %error);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let url = &app.url;
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    xml.push_str(
+        "<rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\">\n<channel>\n<title>",
+    );
+    escape(CHANNEL_TITLE, &mut xml);
+    xml.push_str("</title>\n<description>");
+    escape(CHANNEL_DESCRIPTION, &mut xml);
+    xml.push_str("</description>\n<language>fa</language>\n");
+    let _ = writeln!(xml, "<link>{url}/</link>");
+    let _ = writeln!(
+        xml,
+        "<atom:link href=\"{url}/rss.xml\" rel=\"self\" type=\"application/rss+xml\"/>"
+    );
+    let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    for post in posts {
+        xml.push_str("<item>\n<title>");
+        if post.sentence.is_empty() {
+            escape(&format!("{CHANNEL_TITLE} · {}", post.id), &mut xml);
+        } else {
+            escape(&post.sentence, &mut xml);
+        }
+        xml.push_str("</title>\n");
+        let _ = writeln!(xml, "<link>{url}/p/{}</link>", post.id);
+        let _ = writeln!(xml, "<guid isPermaLink=\"true\">{url}/p/{}</guid>", post.id);
+        // RFC 822, from the `YYYY-MM-DDTHH:MM` read_post already checked.
+        if let Ok(month) = post.date[5..7].parse::<usize>()
+            && (1..=12).contains(&month)
+        {
+            let _ = writeln!(
+                xml,
+                "<pubDate>{} {} {} {}:00 {}</pubDate>",
+                &post.date[8..10],
+                months[month - 1],
+                &post.date[..4],
+                &post.date[11..16],
+                TIMEZONE.replace(':', "")
+            );
+        }
+        xml.push_str("<description>");
+        escape(&post.html.replace("=\"/", &format!("=\"{url}/")), &mut xml);
+        xml.push_str("</description>\n</item>\n");
+    }
+    xml.push_str("</channel>\n</rss>\n");
+    (
+        [(header::CONTENT_TYPE, "application/rss+xml; charset=utf-8")],
+        xml,
+    )
+        .into_response()
 }
 
 /// One line per request, at a level that follows the status: 2xx and 3xx
@@ -1105,6 +1715,7 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
         views: 0,
         sentence: squeeze(sentence, 100),
         excerpt: squeeze(rest, 200),
+        text: excerpt.to_string(),
     }))
 }
 
@@ -1186,6 +1797,91 @@ where
         Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(error.into()),
         Err(error) => Err(anyhow::anyhow!("Database task panicked: {error}")),
+    }
+}
+
+/// The numbers of the folders under `directory` that hold a `post.md`, in
+/// order.
+fn post_ids(directory: &FilePath) -> anyhow::Result<Vec<u32>> {
+    let mut ids = Vec::new();
+    let entries = std::fs::read_dir(directory)
+        .with_context(|| format!("Could not list {}", directory.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if let Ok(id) = name.parse::<u32>()
+            && entry.path().join("post.md").is_file()
+        {
+            ids.push(id);
+        }
+    }
+    ids.sort_unstable();
+    Ok(ids)
+}
+
+/// The visitor's address behind our proxy, else the socket's.
+fn client_ip(headers: &HeaderMap, socket: SocketAddr) -> IpAddr {
+    // The right-most entry of each header is the one our own proxy appended,
+    // which the client cannot forge; anything to its left can be.
+    let mut ip = None;
+    if let Some(forwarded) = header_text(headers, "forwarded")
+        && let Some(last) = forwarded.rsplit(',').next()
+    {
+        for pair in last.split(';') {
+            if let Some((key, value)) = pair.trim().split_once('=')
+                && key.eq_ignore_ascii_case("for")
+            {
+                // `for="[2001:db8::1]:4711"`, `for=192.0.2.1:80` or bare.
+                let value = value.trim_matches('"');
+                let value = match value.strip_prefix('[') {
+                    Some(bracketed) => match bracketed.split_once(']') {
+                        Some((inside, _)) => inside,
+                        None => bracketed,
+                    },
+                    None => match value.split_once(':') {
+                        Some((address, _)) if !value[address.len() + 1..].contains(':') => address,
+                        _ => value,
+                    },
+                };
+                if let Ok(parsed) = value.parse::<IpAddr>() {
+                    ip = Some(parsed);
+                }
+            }
+        }
+    }
+    if ip.is_none()
+        && let Some(value) = header_text(headers, "x-forwarded-for")
+        && let Some(last) = value.rsplit(',').next()
+        && let Ok(parsed) = last.trim().parse::<IpAddr>()
+    {
+        ip = Some(parsed);
+    }
+    if ip.is_none()
+        && let Some(value) = header_text(headers, "x-real-ip")
+        && let Ok(parsed) = value.trim().parse::<IpAddr>()
+    {
+        ip = Some(parsed);
+    }
+    match ip {
+        Some(ip) => ip,
+        None => socket.ip(),
+    }
+}
+
+/// Append `text` to `into`, safe inside HTML or XML text and attributes.
+fn escape(text: &str, into: &mut String) {
+    for character in text.chars() {
+        match character {
+            '&' => into.push_str("&amp;"),
+            '<' => into.push_str("&lt;"),
+            '>' => into.push_str("&gt;"),
+            '"' => into.push_str("&quot;"),
+            '\'' => into.push_str("&#39;"),
+            other => into.push(other),
+        }
     }
 }
 

@@ -6,12 +6,14 @@
 // at least half on screen for two continuous seconds — at most once per post
 // per page load, so fast scrolling counts nothing and coming back counts again.
 // A message opens a menu (Copy Text, Copy Link, Forward) on right click or long
-// press, and the header opens the channel info. The page speaks English or
-// Persian: the reader's choice from the channel info, else the browser's.
+// press, and the header opens the channel info. The JOIN CHANNEL bar opens the
+// Join panel: email (with a captcha), Telegram and RSS. The page speaks
+// English, or Persian once the reader turns it on in the channel info.
 
 (() => {
   const DEVICE_KEY = 'plogia.device';
   const LANGUAGE_KEY = 'plogia.language';
+  const JOINED_KEY = 'plogia.joined';
   const DWELL_MS = 2000;
   const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
     'August', 'September', 'October', 'November', 'December'];
@@ -25,9 +27,22 @@
       channelInfo: 'Channel Info',
       share: 'Share',
       info: 'Info',
-      link: 'Link',
+      website: 'Website',
       language: 'Language',
-      languageName: 'English',
+      telegram: 'Telegram',
+      github: 'GitHub',
+      rss: 'RSS',
+      join: 'Join Channel',
+      joinTitle: 'Join',
+      emailLead: 'Get new posts by email',
+      email: 'Email',
+      answer: 'Characters in the picture',
+      newCaptcha: 'New picture',
+      subscribe: 'Subscribe',
+      subscribed: 'Subscribed',
+      badEmail: 'That email address does not look right.',
+      badCaptcha: 'The characters did not match. Try this picture.',
+      subscribeFailed: 'Could not subscribe. Try again in a moment.',
       copyText: 'Copy Text',
       copyLink: 'Copy Link',
       forward: 'Forward',
@@ -40,14 +55,27 @@
       openPhoto: 'Open the photo',
     },
     fa: {
-      subscribers: (count) => `${count.toLocaleString('en')} مشترک`,
+      subscribers: (count) => `${count.toLocaleString('en')} عضو`,
       posts: (count) => `${count.toLocaleString('en')} پست`,
       channelInfo: 'اطلاعات کانال',
       share: 'اشتراک‌گذاری',
       info: 'توضیحات',
-      link: 'پیوند',
+      website: 'وب‌سایت',
       language: 'زبان',
-      languageName: 'فارسی',
+      telegram: 'تلگرام',
+      github: 'گیت‌هاب',
+      rss: 'RSS',
+      join: 'پیوستن به کانال',
+      joinTitle: 'پیوستن',
+      emailLead: 'دریافت پست‌های تازه با ایمیل',
+      email: 'ایمیل',
+      answer: 'نویسه‌های تصویر',
+      newCaptcha: 'تصویر تازه',
+      subscribe: 'عضویت',
+      subscribed: 'عضو شدید',
+      badEmail: 'نشانی ایمیل درست به نظر نمی‌رسد.',
+      badCaptcha: 'نویسه‌ها درست نبودند. این تصویر را امتحان کنید.',
+      subscribeFailed: 'عضویت انجام نشد. کمی بعد دوباره امتحان کنید.',
       copyText: 'کپی متن',
       copyLink: 'کپی پیوند',
       forward: 'هدایت',
@@ -67,12 +95,19 @@
   const olderSentinel = document.getElementById('older');
   const newerSentinel = document.getElementById('newer');
   const down = document.getElementById('down');
-  const subscribers = document.getElementById('subscribers');
   const lightbox = document.getElementById('lightbox');
   const menu = document.getElementById('menu');
   const toast = document.getElementById('toast');
   const info = document.getElementById('info');
   const viewer = document.getElementById('viewer');
+  const joinBar = document.getElementById('join');
+  const joinPanel = document.getElementById('join-panel');
+  const joinForm = document.getElementById('join-form');
+  const joinEmail = document.getElementById('join-email');
+  const joinAnswer = document.getElementById('join-answer');
+  const joinError = document.getElementById('join-error');
+  const joinSubmit = document.getElementById('join-submit');
+  const captchaImage = document.getElementById('captcha-image');
   const channel = feed.dataset.channel;
   const avatar = feed.dataset.avatar;
   const focus = feed.dataset.post ? Number(feed.dataset.post) : null;
@@ -81,20 +116,11 @@
 
   // ---- Language -----------------------------------------------------------
 
-  // A saved choice sticks. Without one, the first English or Persian entry in
-  // the browser's list (which follows the system's) wins, and English if none.
-  let language = null;
-  try { language = localStorage.getItem(LANGUAGE_KEY); } catch (_) { /* storage blocked */ }
-  if (!Object.hasOwn(STRINGS, language)) {
-    language = 'en';
-    for (const tag of navigator.languages || [navigator.language]) {
-      const base = tag.toLowerCase().split('-')[0];
-      if (base === 'en' || base === 'fa') {
-        language = base;
-        break;
-      }
-    }
-  }
+  // English, unless the reader has turned Persian on.
+  let language = 'en';
+  try {
+    if (localStorage.getItem(LANGUAGE_KEY) === 'fa') language = 'fa';
+  } catch (_) { /* storage blocked */ }
   let words = STRINGS[language];
   let subscriberCount = null;
   let postCount = null;
@@ -104,21 +130,30 @@
     words = STRINGS[language];
     document.documentElement.lang = language;
     document.documentElement.dir = language === 'fa' ? 'rtl' : 'ltr';
+    document.getElementById('info-language').ariaChecked = String(language === 'fa');
     for (const element of document.querySelectorAll('[data-text]')) {
       element.textContent = words[element.dataset.text];
     }
     for (const element of document.querySelectorAll('[data-label]')) {
       element.ariaLabel = words[element.dataset.label];
     }
-    if (subscriberCount !== null) {
-      subscribers.textContent = words.subscribers(subscriberCount);
-      document.getElementById('info-subscribers').textContent = subscribers.textContent;
+    for (const element of document.querySelectorAll('[data-placeholder]')) {
+      element.placeholder = words[element.dataset.placeholder];
     }
+    showSubscribers();
     if (postCount !== null) document.getElementById('info-posts').textContent = words.posts(postCount);
     for (const time of list.querySelectorAll('.meta a')) {
       time.title = timeLabel(time.closest('.post').dataset.date);
     }
     placeDays();
+  }
+
+  // The header, the channel info and the Join panel all show it.
+  function showSubscribers() {
+    if (subscriberCount === null) return;
+    for (const element of document.querySelectorAll('.subscriber-count')) {
+      element.textContent = words.subscribers(subscriberCount);
+    }
   }
 
   document.getElementById('info-language').addEventListener('click', () => {
@@ -146,8 +181,7 @@
       const body = await response.json();
       try { localStorage.setItem(DEVICE_KEY, body.device); } catch (_) { /* storage blocked */ }
       subscriberCount = body.subscribers;
-      subscribers.textContent = words.subscribers(subscriberCount);
-      document.getElementById('info-subscribers').textContent = subscribers.textContent;
+      showSubscribers();
       return body.device;
     } catch (error) {
       console.error(error);
@@ -569,11 +603,12 @@
 
   // ---- Channel info -------------------------------------------------------
 
-  // The panel, and the photo opened from it, are each a history entry, so the
-  // back button closes the top one as on a phone.
+  // The panel, the photo opened from it, and the Join panel are each a history
+  // entry, so the back button closes the top one as on a phone.
   function openInfo() {
     if (!info.hidden) return;
     info.hidden = false;
+    joinPanel.hidden = true;
     document.body.classList.add('info-open');
     history.pushState({ info: true }, '');
   }
@@ -582,7 +617,8 @@
     const state = history.state || {};
     viewer.hidden = !state.photo;
     info.hidden = !state.info;
-    document.body.classList.toggle('info-open', !info.hidden);
+    joinPanel.hidden = !state.join;
+    document.body.classList.toggle('info-open', !info.hidden || !joinPanel.hidden);
   });
 
   document.getElementById('info-photo').addEventListener('click', () => {
@@ -597,9 +633,105 @@
   document.getElementById('channel').addEventListener('click', openInfo);
   document.getElementById('info-close').addEventListener('click', () => history.back());
   document.getElementById('info-share').addEventListener('click', () => forward(`${location.origin}/`));
-  document.getElementById('info-host').textContent = location.host;
   document.getElementById('info-link').addEventListener('click', () => {
     copy(`${location.origin}/`, words.linkCopied);
+  });
+  // Telegram and GitHub are plain links into a new tab; RSS copies the feed.
+  for (const card of document.querySelectorAll('.card.rss')) {
+    card.addEventListener('click', () => copy(`${location.origin}/rss.xml`, words.linkCopied));
+  }
+
+  // ---- Join ---------------------------------------------------------------
+
+  let joined = false;
+  try { joined = localStorage.getItem(JOINED_KEY) === '1'; } catch (_) { /* storage blocked */ }
+  joinBar.hidden = joined;
+  document.body.classList.toggle('can-join', !joined);
+
+  joinBar.addEventListener('click', () => {
+    if (!joinPanel.hidden) return;
+    info.hidden = true;
+    joinPanel.hidden = false;
+    document.body.classList.add('info-open');
+    history.pushState({ join: true }, '');
+    loadCaptcha();
+  });
+  document.getElementById('join-close').addEventListener('click', () => history.back());
+
+  // The server makes one captcha per address per second and answers 429 to
+  // the rest, so a quick second click waits its turn.
+  let captchaId = null;
+  let captchaLoading = false;
+  async function loadCaptcha() {
+    if (captchaLoading) return;
+    captchaLoading = true;
+    try {
+      for (let tries = 0; tries < 10; tries++) {
+        const response = await fetch('/api/captcha');
+        if (response.status === 429) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          continue;
+        }
+        if (response.status !== 200) return;
+        const body = await response.json();
+        captchaId = body.id;
+        captchaImage.src = body.image;
+        joinAnswer.value = '';
+        return;
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      captchaLoading = false;
+    }
+  }
+  document.getElementById('captcha-new').addEventListener('click', loadCaptcha);
+
+  function joinFailed(key) {
+    joinError.dataset.text = key;
+    joinError.textContent = words[key];
+    joinError.hidden = false;
+  }
+
+  joinForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (joinSubmit.disabled) return;
+    joinSubmit.disabled = true;
+    joinError.hidden = true;
+    try {
+      const response = await fetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: joinEmail.value, captcha: captchaId || '', answer: joinAnswer.value }),
+      });
+      if (response.status === 204) {
+        try { localStorage.setItem(JOINED_KEY, '1'); } catch (_) { /* storage blocked */ }
+        joinBar.hidden = true;
+        document.body.classList.remove('can-join');
+        notify(words.subscribed);
+        if (!joinPanel.hidden) history.back();
+        return;
+      }
+      let reason = null;
+      if (response.status === 400) {
+        try { reason = (await response.json()).error; } catch (_) { /* not JSON */ }
+      }
+      if (reason === 'email') {
+        joinFailed('badEmail');
+        joinEmail.focus();
+        return;
+      }
+      // Any other answer used the captcha up.
+      joinFailed(reason === 'captcha' ? 'badCaptcha' : 'subscribeFailed');
+      loadCaptcha();
+      joinAnswer.focus();
+    } catch (error) {
+      console.error(error);
+      joinFailed('subscribeFailed');
+      loadCaptcha();
+    } finally {
+      joinSubmit.disabled = false;
+    }
   });
 
   // ---- Clicks in the feed -------------------------------------------------
@@ -626,7 +758,7 @@
     if (event.key !== 'Escape') return;
     if (!menu.hidden) closeMenu();
     else if (!lightbox.hidden) lightbox.hidden = true;
-    else if (!viewer.hidden || !info.hidden) history.back();
+    else if (!viewer.hidden || !info.hidden || !joinPanel.hidden) history.back();
   });
 
   // ---- Start --------------------------------------------------------------

@@ -1,6 +1,6 @@
 [package]
 name = "plogia"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "A blog that looks and reads like a Telegram channel, with view counts"
 authors = ["Pouriya Jahanbakhsh <pouriya.jahanbakhsh@gmail.com>"]
@@ -57,6 +57,31 @@ clap = { version = "4.6.7", default-features = false, features = [
     "usage",
     "error-context",
 ] }
+
+# The subscribe form's picture of characters, Easy preset, no audio.
+captcha = { version = "1.0.0", default-features = false }
+
+# Post emails, sent straight to each recipient's MX on port 25 with
+# opportunistic STARTTLS, DKIM-signed. No relay, no login.
+lettre = { version = "0.11.23", default-features = false, features = [
+    "smtp-transport",
+    "tokio1",
+    "tokio1-rustls",
+    "ring",
+    "webpki-roots",
+    "builder",
+    "dkim",
+] }
+
+# MX records of each subscriber's domain, from /etc/resolv.conf.
+hickory-resolver = { version = "0.26.3", default-features = false, features = [
+    "system-config",
+    "tokio",
+] }
+
+# The DKIM key, generated once into the database: RSA 2048, since Gmail and
+# Outlook do not reliably verify Ed25519. The same version lettre signs with.
+rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "u64_digit", "getrandom"] }
 
 anyhow = "1.0"
 

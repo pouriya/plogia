@@ -13,6 +13,9 @@ WWW_DIR ?= $(CURDIR)/www
 POSTS_DIR ?= $(CURDIR)/posts
 DB_FILE ?= $(CURDIR)/plogia.db
 PORT ?= 8080
+# What links in previews, the RSS feed and emails point at; its host signs and
+# sends the emails.
+URL ?= http://localhost:${PORT}
 
 # `make docker`. DOCKER_REGISTRY prefixes both base images, with its trailing
 # slash, for a machine that cannot reach Docker Hub; empty means whatever the
@@ -42,7 +45,7 @@ dev: ${BUILD_DIR}
 
 
 start-dev: dev
-	${DEV_CMD} --debug --www ${WWW_DIR} --posts ${POSTS_DIR} --db ${DB_FILE} --port ${PORT}
+	${DEV_CMD} --debug --www ${WWW_DIR} --posts ${POSTS_DIR} --db ${DB_FILE} --port ${PORT} --url ${URL}
 
 
 # The release binary and www/ in ${DIST_DIR}/${DIST_NAME}.tar.gz, plus its
