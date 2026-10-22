@@ -51,7 +51,7 @@ result; do not claim it passed without running it.
 src/main.rs     The whole backend: settings consts, CLI, schema, DKIM key, email sender, routes, handlers
 www/            The front end, served as-is from --www
   index.html    Template for /, /index.html and /p/<n>; {{name}} filled by the server
-  app.js        Handshake, feed drawing, paging, view reporting, message menu, channel info, Join
+  app.js        Handshake, feed drawing, post languages, paging, view reporting, message menu, channel info, Join
   style.css     Telegram light / Night, by prefers-color-scheme
   plogia.jpg    Channel avatar and default link-preview image
   favicon.ico   16, 32, 48 px from plogia.jpg
@@ -92,17 +92,21 @@ port firewalled so only the proxy reaches it.
 ```
 posts/
   12/
-    post.md     ---\ndate: 2026-10-19 14:30\n---\nMarkdown body
-    cat.jpg     linked from post.md as ![](cat.jpg), served at /posts/12/cat.jpg
+    fa.md       ---\ndate: 2026-10-19 14:30\n---\nMarkdown body, in Persian
+    en.md       ---\ndate: 2026-10-19 14:30\n---\nMarkdown body, in English
+    cat.jpg     linked from either as ![](cat.jpg), served at /posts/12/cat.jpg
 ```
 
 - The folder name is the post number: its id, its order and its permalink
   (`/p/12`). Numbers need not be contiguous.
-- `date` is `YYYY-MM-DD HH:MM`, the author's wall clock, no zone.
+- **A post is `fa.md`, `en.md` or both**; a folder with neither is not a post.
+  Views, the post count and delivery rows are per post, not per language.
+- `date` is `YYYY-MM-DD HH:MM`, the author's wall clock, no zone. Each file
+  carries it, and with both they must agree, or the post does not parse.
 - **A single newline is a line break**, like typing in Telegram; a blank line is
   a new paragraph.
 - Relative links and images resolve into the post's own folder.
-- `post.md` itself, dotfiles and anything outside a numbered folder are never
+- `fa.md`, `en.md`, dotfiles and anything outside a numbered folder are never
   served.
 - **Nothing is kept in memory.** Every page load and every `GET /api/posts`
   lists the directory and reads the posts, so a post is live as soon as its
@@ -113,14 +117,14 @@ posts/
 
 | Route | What |
 |-------|------|
-| `GET /`, `/index.html`, `/p/{n}` | `www/index.html` with link-preview tags filled; unknown `n` is a 404 that still shows the channel |
+| `GET /`, `/index.html`, `/p/{n}` `?l=fa\|en` | `www/index.html` with link-preview tags filled; unknown `n` is a 404 that still shows the channel |
 | `GET /posts/{n}/{file}` | A post's media |
 | `POST /api/visit` | The handshake, once per page open: `{device?, path, referrer}` → `{device, subscribers}`, `subscribers` being the email subscribers |
-| `GET /api/posts?before=n\|after=n\|around=n` | One page of posts, oldest first, with `older`/`newer` flags, view totals and the channel's `total` post count |
+| `GET /api/posts?before=n\|after=n\|around=n` | One page of posts, oldest first, each with the HTML of its `fa` and/or `en`, with `older`/`newer` flags, view totals and the channel's `total` post count |
 | `POST /api/views` | `{device, posts}` → `{views}`, the new totals |
 | `GET /api/captcha` | `{id, image}`, a `data:image/png` URL; `429` + `Retry-After: 1` over the limit |
 | `POST /api/subscribe` | `{email, captcha, answer}` → `204` (new or already subscribed, alike), or `400 {error: "email" \| "captcha"}` |
-| `GET /rss.xml` | RSS 2.0, the newest `PAGE_SIZE` posts, whole HTML with absolute links |
+| `GET /rss.xml?l=fa\|en` | RSS 2.0, the newest `PAGE_SIZE` posts, whole HTML with absolute links, one feed per language |
 | anything else | A file from `--www` |
 
 Behind the proxy, the client address is the right-most entry of `Forwarded:
@@ -129,14 +133,23 @@ right-most entry is the one our own proxy appended; a client can forge
 anything to its left. Link previews take their absolute URLs from `--url`,
 never from request headers.
 
+**`?l=fa` or `?l=en`** picks the language of a link preview, of the page it
+opens and of the feed; missing or anything else is Persian. A post missing
+that language comes in the other. Every link we hand out carries it: Copy
+Link, Forward, Share, the Website and RSS tiles, a post's time, feed items,
+and emails. A feed item's `guid` is the bare `/p/<n>`, as before there were
+languages.
+
 **Link previews** — what Telegram, WhatsApp and X show when someone pastes our
 link. Their bots are counted as robots but still get the page and its tags.
 `/` is `og:type=website` with `CHANNEL_TITLE` and `CHANNEL_DESCRIPTION`. `/p/<n>`
-is `og:type=article`: the title is the post's first sentence (up to the first
+is `og:type=article`, in the `?l=` language: the title is the post's first sentence (up to the first
 `.` `!` `?` `؟` followed by a space, or the first line break; 100 characters at
 most), the description is the 200 characters after it, and
 `article:published_time` is the date in `TIMEZONE`. A post with no text is
-titled `Π · <n>`. Also `og:locale=fa_IR`, `rel=canonical`, `twitter:card=summary`.
+titled `Π · <n>`. Also `og:locale` (`fa_IR` or `en_US`, the language shown,
+as is `<html lang>`), `rel=canonical` and `og:url` with `?l=`,
+`twitter:card=summary`.
 No `og:image`, on purpose: previews are text only.
 
 Everything answers `Cache-Control: no-cache` unless the handler set its own:
@@ -201,7 +214,7 @@ key    (name PRIMARY KEY, value)                      -- `dkim`: the signing key
   پیوستید. هر پستی که از این پس منتشر شود، به همین نشانی برایتان فرستاده
   می‌شود." / "You're subscribed to Π. Every new post will come to this
   address.", and named links to the channel, Telegram and RSS (spelled out in
-  the plain-text part).
+  the plain-text part), each half's with its own `?l=`.
 - **No relay**: each email goes to the recipient domain's MX hosts (by
   preference; the domain itself without MX records; refused on a null MX) on
   port 25, with opportunistic STARTTLS that accepts any certificate, as mail
@@ -212,9 +225,12 @@ key    (name PRIMARY KEY, value)                      -- `dkim`: the signing key
   `failed` with its `error`, never tried again. `sent` and `failed` both count
   as delivered.
 - **The email**: from `Π <noreply@<host of --url>>`, subject `EMAIL_TITLE ·
-  <first sentence>` (`EMAIL_TITLE · <n>` without one), the post's HTML with
-  absolute links and a plain-text part, both ending in a "View in channel" link
-  to `/p/<n>`, with a `Message-ID` and DKIM-signed (RSA-SHA256).
+  <fa first sentence> / <en first sentence>` (only the ones there are;
+  `EMAIL_TITLE · <n>` without any), every version of the post in one email,
+  Persian then English like the welcome: an HTML part with absolute links and
+  a plain-text part, each version ending in its own link, «مشاهده در کانال» to
+  `/p/<n>?l=fa` and "View in channel" to `/p/<n>?l=en`, with a `Message-ID`
+  and DKIM-signed (RSA-SHA256).
 - **DKIM**: an RSA 2048 key is generated into `key` on first start and kept;
   every start logs the TXT record to publish at
   `plogia._domainkey.<host>`. Mail only lands with that record, SPF and DMARC
@@ -228,8 +244,15 @@ post at the bottom, the page opens there, older posts load as the reader
 scrolls up. Text direction is per block (`dir="auto"`), so Persian and English
 lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN.
 
+- **Post languages**: `/api/posts` sends every version, so a post shows in the
+  page's language, or in its other one when it lacks it, with a small `FA` or
+  `EN` tag before the views whenever it is not in the page's language.
+  Switching redraws posts in place and keeps the post at the top of the screen
+  where it is.
 - **Message menu**: right click, or a long press on touch, opens Copy Text,
-  Copy Link (`/p/<n>`) and Forward. A round forward button sits beside each
+  Copy Link (`/p/<n>?l=`, the language the post shows), Forward, and "Show in
+  English" / "Show in Persian", which flips that post until the page is left;
+  it is there on every post, disabled on one with a single version. A round forward button sits beside each
   bubble, on hover with a mouse and always on touch. Forward shares the link
   alone through the system share sheet (`navigator.share`); where there is
   none, it copies the link. Every copy shows a toast.
@@ -250,6 +273,8 @@ lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN.
   the bar is never shown again in that browser.
 - **Language**: English by default; Persian only when the reader turns on the
   فارسی switch in the channel info, kept in `localStorage` (`plogia.language`).
+  A link's `?l=` wins for that page load and is not saved; the switch rewrites
+  it in the address so a reload keeps the choice.
   The browser's languages are not consulted. It switches in place, no reload.
   Subscribers are "عضو" in Persian, to match پیوستن and عضویت. Persian turns
   the whole layout right to left, keeps Latin digits, and dates day pills and

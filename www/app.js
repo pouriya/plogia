@@ -8,7 +8,10 @@
 // A message opens a menu (Copy Text, Copy Link, Forward) on right click or long
 // press, and the header opens the channel info. The JOIN CHANNEL bar opens the
 // Join panel: email (with a captcha), Telegram and RSS. The page speaks
-// English, or Persian once the reader turns it on in the channel info.
+// English, or Persian once the reader turns it on in the channel info, or
+// what a link's ?l= says for that page load. A post shows in the page's
+// language, in its other one when it lacks it (tagged FA or EN), and the menu
+// flips a post that has both.
 
 (() => {
   const DEVICE_KEY = 'plogia.device';
@@ -46,6 +49,8 @@
       copyText: 'Copy Text',
       copyLink: 'Copy Link',
       forward: 'Forward',
+      showEn: 'Show in English',
+      showFa: 'Show in Persian',
       textCopied: 'Text copied to clipboard',
       linkCopied: 'Link copied to clipboard',
       noPosts: 'No posts yet.',
@@ -79,6 +84,8 @@
       copyText: 'کپی متن',
       copyLink: 'کپی پیوند',
       forward: 'هدایت',
+      showEn: 'نمایش به انگلیسی',
+      showFa: 'نمایش به فارسی',
       textCopied: 'متن کپی شد',
       linkCopied: 'پیوند کپی شد',
       noPosts: 'هنوز پستی نیست.',
@@ -97,6 +104,7 @@
   const down = document.getElementById('down');
   const lightbox = document.getElementById('lightbox');
   const menu = document.getElementById('menu');
+  const menuFlip = document.getElementById('menu-flip');
   const toast = document.getElementById('toast');
   const info = document.getElementById('info');
   const viewer = document.getElementById('viewer');
@@ -116,14 +124,19 @@
 
   // ---- Language -----------------------------------------------------------
 
-  // English, unless the reader has turned Persian on.
+  // English, unless the reader has turned Persian on. A link's ?l= wins for
+  // this page load and is not saved.
   let language = 'en';
   try {
     if (localStorage.getItem(LANGUAGE_KEY) === 'fa') language = 'fa';
   } catch (_) { /* storage blocked */ }
+  const linked = new URLSearchParams(location.search).get('l');
+  if (linked === 'en' || linked === 'fa') language = linked;
   let words = STRINGS[language];
   let subscriberCount = null;
   let postCount = null;
+  const loaded = new Map();  // post number -> the post as /api/posts sent it
+  const flipped = new Set(); // posts flipped to their other language from the menu
 
   // Redraws every string in place, so switching needs no reload.
   function applyLanguage() {
@@ -145,7 +158,20 @@
     for (const time of list.querySelectorAll('.meta a')) {
       time.title = timeLabel(time.closest('.post').dataset.date);
     }
+    document.getElementById('rss-link').href = `/rss.xml?l=${language}`;
+    // Posts change length in the other language; the one at the top of the
+    // screen stays where it is.
+    let anchor = null;
+    for (const article of list.querySelectorAll('.post')) {
+      if (article.getBoundingClientRect().bottom > 0) {
+        anchor = article;
+        break;
+      }
+    }
+    const before = anchor ? anchor.getBoundingClientRect().top : 0;
+    for (const article of list.querySelectorAll('.post')) showVersion(article);
     placeDays();
+    if (anchor) scrollBy(0, anchor.getBoundingClientRect().top - before);
   }
 
   // The header, the channel info and the Join panel all show it.
@@ -159,6 +185,12 @@
   document.getElementById('info-language').addEventListener('click', () => {
     language = language === 'en' ? 'fa' : 'en';
     try { localStorage.setItem(LANGUAGE_KEY, language); } catch (_) { /* storage blocked */ }
+    // A ?l= in the address would undo the switch on reload.
+    const address = new URL(location.href);
+    if (address.searchParams.has('l')) {
+      address.searchParams.set('l', language);
+      history.replaceState(history.state, '', address);
+    }
     applyLanguage();
   });
   applyLanguage();
@@ -355,25 +387,12 @@
 
     const text = document.createElement('div');
     text.className = 'text';
-    text.innerHTML = post.html;
-    // Each block finds its own direction, so a Persian line and an English
-    // line in one post each read the right way.
-    for (const block of text.querySelectorAll('p, ul, ol, li, h1, h2, h3, h4, h5, h6, blockquote, th, td')) {
-      block.dir = 'auto';
-    }
-    for (const link of text.querySelectorAll('a[href]')) {
-      if (link.origin !== location.origin) {
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-      }
-    }
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.innerHTML = `<span class="views">${EYE}<span></span></span><a></a>`;
+    meta.innerHTML = `<span class="language" hidden></span><span class="views">${EYE}<span></span></span><a></a>`;
     meta.querySelector('.views span').textContent = shortCount(post.views);
     const time = meta.querySelector('a');
-    time.href = `/p/${post.id}`;
     time.textContent = post.date.slice(11, 16);
     time.title = timeLabel(post.date);
 
@@ -386,7 +405,37 @@
 
     bubble.append(author, text, meta);
     article.append(picture, bubble, forward);
+    loaded.set(post.id, post);
+    showVersion(article);
     return article;
+  }
+
+  // Fills a post's text in the page's language, or in the other one when the
+  // post lacks it or the reader flipped it, tagged FA or EN when that is not
+  // the page's. Its links then carry the language it shows.
+  function showVersion(article) {
+    const post = loaded.get(Number(article.dataset.id));
+    let shown = language;
+    if (post[shown] === undefined || flipped.has(post.id)) shown = language === 'fa' ? 'en' : 'fa';
+    const tag = article.querySelector('.language');
+    tag.hidden = shown === language;
+    tag.textContent = shown.toUpperCase();
+    article.querySelector('.meta a').href = `/p/${post.id}?l=${shown}`;
+    if (article.dataset.language === shown) return;
+    article.dataset.language = shown;
+    const text = article.querySelector('.text');
+    text.innerHTML = post[shown];
+    // Each block finds its own direction, so a Persian line and an English
+    // line in one post each read the right way.
+    for (const block of text.querySelectorAll('p, ul, ol, li, h1, h2, h3, h4, h5, h6, blockquote, th, td')) {
+      block.dir = 'auto';
+    }
+    for (const link of text.querySelectorAll('a[href]')) {
+      if (link.origin !== location.origin) {
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+      }
+    }
   }
 
   // One sticky date pill in front of the first post of each day.
@@ -490,7 +539,7 @@
 
   down.addEventListener('click', () => {
     if (state.newer) {
-      location.href = '/';
+      location.href = `/?l=${language}`;
     } else {
       scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
     }
@@ -541,6 +590,13 @@
 
   function openMenu(article, x, y) {
     menuPost = article;
+    // Always there, to the language the post is not showing; disabled on a
+    // post that has only one.
+    const post = loaded.get(Number(article.dataset.id));
+    menuFlip.disabled = post.fa === undefined || post.en === undefined;
+    const key = article.dataset.language === 'fa' ? 'showEn' : 'showFa';
+    menuFlip.lastElementChild.dataset.text = key;
+    menuFlip.lastElementChild.textContent = words[key];
     menu.hidden = false;
     const box = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(8, Math.min(x, innerWidth - box.width - 8))}px`;
@@ -588,14 +644,18 @@
 
   menu.addEventListener('click', (event) => {
     const item = event.target.closest('button');
-    if (!item || !menuPost) return;
+    if (!item || item.disabled || !menuPost) return;
     const article = menuPost;
     closeMenu();
-    const url = `${location.origin}/p/${article.dataset.id}`;
+    const id = Number(article.dataset.id);
+    const url = `${location.origin}/p/${id}?l=${article.dataset.language}`;
     if (item.dataset.action === 'text') {
       copy(article.querySelector('.text').innerText.trim(), words.textCopied);
     } else if (item.dataset.action === 'link') {
       copy(url, words.linkCopied);
+    } else if (item.dataset.action === 'flip') {
+      if (flipped.has(id)) flipped.delete(id); else flipped.add(id);
+      showVersion(article);
     } else {
       forward(url);
     }
@@ -632,13 +692,14 @@
 
   document.getElementById('channel').addEventListener('click', openInfo);
   document.getElementById('info-close').addEventListener('click', () => history.back());
-  document.getElementById('info-share').addEventListener('click', () => forward(`${location.origin}/`));
+  document.getElementById('info-share').addEventListener('click', () => forward(`${location.origin}/?l=${language}`));
   document.getElementById('info-link').addEventListener('click', () => {
-    copy(`${location.origin}/`, words.linkCopied);
+    copy(`${location.origin}/?l=${language}`, words.linkCopied);
   });
-  // Telegram and GitHub are plain links into a new tab; RSS copies the feed.
+  // Telegram and GitHub are plain links into a new tab; RSS copies the feed
+  // in the page's language.
   for (const card of document.querySelectorAll('.card.rss')) {
-    card.addEventListener('click', () => copy(`${location.origin}/rss.xml`, words.linkCopied));
+    card.addEventListener('click', () => copy(`${location.origin}/rss.xml?l=${language}`, words.linkCopied));
   }
 
   // ---- Join ---------------------------------------------------------------
@@ -739,7 +800,8 @@
   list.addEventListener('click', (event) => {
     const button = event.target.closest('.forward');
     if (button) {
-      forward(`${location.origin}/p/${button.closest('.post').dataset.id}`);
+      const article = button.closest('.post');
+      forward(`${location.origin}/p/${article.dataset.id}?l=${article.dataset.language}`);
       return;
     }
     if (event.target.closest('.post > .avatar')) {

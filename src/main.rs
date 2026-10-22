@@ -137,8 +137,8 @@ struct CommandLine {
     #[arg(long, value_name = "DIRECTORY")]
     www: PathBuf,
 
-    /// One folder per post, named by its number: `<n>/post.md` and the files
-    /// it links to, which are served under `/posts/<n>/`.
+    /// One folder per post, named by its number: `<n>/fa.md`, `<n>/en.md` or
+    /// both, and the files they link to, which are served under `/posts/<n>/`.
     #[arg(long, value_name = "DIRECTORY")]
     posts: PathBuf,
 
@@ -187,14 +187,26 @@ struct App {
     wake: tokio::sync::Notify,
 }
 
-/// A post as `GET /api/posts` returns it.
+/// A post as `GET /api/posts` returns it: `fa`, `en` or both, never neither.
 #[derive(Serialize)]
 struct Post {
     id: u32,
     /// `YYYY-MM-DDTHH:MM`, the author's wall clock, no zone.
     date: String,
-    html: String,
+    /// `fa.md`, when the post has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fa: Option<Version>,
+    /// `en.md`, when the post has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    en: Option<Version>,
     views: u64,
+}
+
+/// One language of a post. Sent to the front end as its HTML alone.
+#[derive(Serialize)]
+#[serde(transparent)]
+struct Version {
+    html: String,
     /// First sentence, the title of the link preview of `/p/<n>`.
     #[serde(skip)]
     sentence: String,
@@ -204,6 +216,26 @@ struct Post {
     /// The whole post as plain text, the text part of its email.
     #[serde(skip)]
     text: String,
+}
+
+impl Post {
+    /// The version in `language`, or the other one when the post lacks it,
+    /// with the code of the one returned.
+    fn pick(&self, language: &str) -> Option<(&'static str, &Version)> {
+        match (&self.fa, &self.en) {
+            (Some(_), Some(en)) if language == "en" => Some(("en", en)),
+            (Some(fa), _) => Some(("fa", fa)),
+            (None, Some(en)) => Some(("en", en)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// `?l=fa` or `?l=en` on `/`, `/p/<n>` and `/rss.xml`: the language of the
+/// link preview or the feed. Missing or anything else is Persian.
+#[derive(Deserialize)]
+struct LanguageQuery {
+    l: Option<String>,
 }
 
 /// 48 bits of Unix milliseconds then 80 random bits, big-endian, written as 26
@@ -640,8 +672,12 @@ async fn main() -> anyhow::Result<()> {
             // The error and whether it is worth another try (a 4xx answer).
             let outcome: Result<String, (String, bool)> = 'send: {
                 let (subject, html, text) = if post < 0 {
-                    let channel = format!("{}/", app.url);
-                    let rss = format!("{}/rss.xml", app.url);
+                    // Each half links to the channel and the feed in its own
+                    // language.
+                    let channel_fa = format!("{}/?l=fa", app.url);
+                    let channel_en = format!("{}/?l=en", app.url);
+                    let rss_fa = format!("{}/rss.xml?l=fa", app.url);
+                    let rss_en = format!("{}/rss.xml?l=en", app.url);
                     let mut title = String::new();
                     escape(CHANNEL_TITLE, &mut title);
                     (
@@ -650,19 +686,19 @@ async fn main() -> anyhow::Result<()> {
                             "<!doctype html>\n<html><body>\n\
                              <div dir=\"rtl\" lang=\"fa\">\n\
                              <p>سلام،<br>\nبه {title} پیوستید. هر پستی که از این پس منتشر شود، به همین نشانی برایتان فرستاده می‌شود.</p>\n\
-                             <p><a href=\"{channel}\">کانال</a> · <a href=\"{CHANNEL_TELEGRAM}\">تلگرام</a> · <a href=\"{rss}\">خوراک RSS</a></p>\n\
+                             <p><a href=\"{channel_fa}\">کانال</a> · <a href=\"{CHANNEL_TELEGRAM}\">تلگرام</a> · <a href=\"{rss_fa}\">خوراک RSS</a></p>\n\
                              </div>\n<hr>\n\
                              <div dir=\"ltr\" lang=\"en\">\n\
                              <p>Hi,<br>\nYou're subscribed to {title}. Every new post will come to this address.</p>\n\
-                             <p><a href=\"{channel}\">Channel</a> · <a href=\"{CHANNEL_TELEGRAM}\">Telegram</a> · <a href=\"{rss}\">RSS</a></p>\n\
+                             <p><a href=\"{channel_en}\">Channel</a> · <a href=\"{CHANNEL_TELEGRAM}\">Telegram</a> · <a href=\"{rss_en}\">RSS</a></p>\n\
                              </div>\n</body></html>\n"
                         ),
                         format!(
                             "سلام،\nبه {CHANNEL_TITLE} پیوستید. هر پستی که از این پس منتشر شود، به همین نشانی برایتان فرستاده می‌شود.\n\n\
-                             کانال: {channel}\nتلگرام: {CHANNEL_TELEGRAM}\nخوراک RSS: {rss}\n\n\
+                             کانال: {channel_fa}\nتلگرام: {CHANNEL_TELEGRAM}\nخوراک RSS: {rss_fa}\n\n\
                              ————————\n\n\
                              Hi,\nYou're subscribed to {CHANNEL_TITLE}. Every new post will come to this address.\n\n\
-                             Channel: {channel}\nTelegram: {CHANNEL_TELEGRAM}\nRSS: {rss}\n"
+                             Channel: {channel_en}\nTelegram: {CHANNEL_TELEGRAM}\nRSS: {rss_en}\n"
                         ),
                     )
                 } else {
@@ -680,22 +716,45 @@ async fn main() -> anyhow::Result<()> {
                             break 'send Err((format!("Post reader panicked: {error}"), false));
                         }
                     };
-                    let subject = if found.sentence.is_empty() {
+                    // Persian then English, like the welcome: each version a
+                    // block of its own ending in a link to it in the channel.
+                    let mut sentences = String::new();
+                    let mut html = String::from("<!doctype html>\n<html><body>\n");
+                    let mut text = String::new();
+                    for (language, version, direction, view) in [
+                        ("fa", &found.fa, "rtl", "مشاهده در کانال"),
+                        ("en", &found.en, "ltr", "View in channel"),
+                    ] {
+                        let Some(version) = version else {
+                            continue;
+                        };
+                        if !version.sentence.is_empty() {
+                            if !sentences.is_empty() {
+                                sentences.push_str(" / ");
+                            }
+                            sentences.push_str(&version.sentence);
+                        }
+                        if !text.is_empty() {
+                            html.push_str("<hr>\n");
+                            text.push_str("\n\n————————\n\n");
+                        }
+                        let link = format!("{}/p/{post}?l={language}", app.url);
+                        // Post links and images are root-relative; a mail
+                        // client needs them whole.
+                        let _ = write!(
+                            html,
+                            "<div dir=\"{direction}\" lang=\"{language}\">\n{}<p><a href=\"{link}\">{view}</a></p>\n</div>\n",
+                            version.html.replace("=\"/", &format!("=\"{}/", app.url))
+                        );
+                        let _ = write!(text, "{}\n\n{view}: {link}\n", version.text.trim());
+                    }
+                    html.push_str("</body></html>\n");
+                    let subject = if sentences.is_empty() {
                         format!("{EMAIL_TITLE} · {post}")
                     } else {
-                        format!("{EMAIL_TITLE} · {}", found.sentence)
+                        format!("{EMAIL_TITLE} · {sentences}")
                     };
-                    let link = format!("{}/p/{post}", app.url);
-                    // Post links and images are root-relative; a mail client
-                    // needs them whole.
-                    let html = found.html.replace("=\"/", &format!("=\"{}/", app.url));
-                    (
-                        subject,
-                        format!(
-                            "<!doctype html>\n<html><body>\n<div dir=\"auto\">\n{html}</div>\n<p><a href=\"{link}\">View in channel</a></p>\n</body></html>\n"
-                        ),
-                        format!("{}\n\nView in channel: {link}\n", found.text.trim()),
-                    )
+                    (subject, html, text)
                 };
                 let to = match email.parse::<Mailbox>() {
                     Ok(to) => to,
@@ -892,11 +951,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// `GET /`, `/index.html` and `/p/<n>`: `index.html` with the link-preview
-/// tags filled in. The feed itself is drawn by the front end from
-/// `/api/posts`; `{{post}}` tells it which post to open at.
+/// tags filled in, in the language of `?l=`, Persian without one. The feed
+/// itself is drawn by the front end from `/api/posts`; `{{post}}` tells it
+/// which post to open at.
 async fn page(
     State(app): State<Arc<App>>,
     post: Option<Path<u32>>,
+    Query(query): Query<LanguageQuery>,
     headers: HeaderMap,
 ) -> Response {
     robot(&app, &headers, "page").await;
@@ -915,19 +976,26 @@ async fn page(
     let mut kind = "website";
     let mut published = String::new();
     let mut focus = String::new();
-    let mut path = "/".to_string();
+    let mut language = match query.l.as_deref() {
+        Some("en") => "en",
+        _ => "fa",
+    };
+    let mut path = String::new();
     if let Some(Path(id)) = post {
-        path = format!("/p/{id}");
+        path = format!("p/{id}");
         let directory = app.posts.clone();
         match tokio::task::spawn_blocking(move || read_post(&directory, id)).await {
             Ok(Ok(Some(found))) => {
-                // A post of pictures alone has no sentence to show.
-                title = if found.sentence.is_empty() {
-                    format!("{CHANNEL_TITLE} · {id}")
-                } else {
-                    found.sentence
-                };
-                description = found.excerpt;
+                if let Some((picked, version)) = found.pick(language) {
+                    language = picked;
+                    // A post of pictures alone has no sentence to show.
+                    title = if version.sentence.is_empty() {
+                        format!("{CHANNEL_TITLE} · {id}")
+                    } else {
+                        version.sentence.clone()
+                    };
+                    description = version.excerpt.clone();
+                }
                 kind = "article";
                 published = format!("{}:00{TIMEZONE}", found.date);
                 focus = id.to_string();
@@ -946,7 +1014,8 @@ async fn page(
         }
     }
 
-    let url = format!("{}{path}", app.url);
+    let url = format!("{}/{path}?l={language}", app.url);
+    let locale = if language == "en" { "en_US" } else { "fa_IR" };
 
     let values = [
         ("channel_title", CHANNEL_TITLE),
@@ -959,6 +1028,8 @@ async fn page(
         ("type", kind),
         ("published", published.as_str()),
         ("url", url.as_str()),
+        ("language", language),
+        ("locale", locale),
         ("post", focus.as_str()),
     ];
     // One pass over the template, so a `{{…}}` inside a post excerpt is text,
@@ -990,7 +1061,7 @@ async fn page(
     (status, Html(html)).into_response()
 }
 
-/// `GET /posts/<n>/<file>`: a file from a post's folder. `post.md` itself and
+/// `GET /posts/<n>/<file>`: a file from a post's folder. `fa.md`, `en.md` and
 /// dotfiles are not served, and `<n>` must be a number, so nothing else under
 /// `--posts` — a `.git`, a README — is reachable.
 async fn media(
@@ -1003,7 +1074,8 @@ async fn media(
         || file.is_empty()
         || file.starts_with('.')
         || file.contains(['/', '\\'])
-        || file == "post.md"
+        || file == "fa.md"
+        || file == "en.md"
     {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -1259,7 +1331,9 @@ async fn views(
     }
     let mut ids = Vec::new();
     for id in body.posts {
-        if !ids.contains(&id) && app.posts.join(id.to_string()).join("post.md").is_file() {
+        let folder = app.posts.join(id.to_string());
+        if !ids.contains(&id) && (folder.join("fa.md").is_file() || folder.join("en.md").is_file())
+        {
             ids.push(id);
         }
     }
@@ -1522,8 +1596,14 @@ async fn subscribe(
 }
 
 /// `GET /rss.xml`: the newest [`PAGE_SIZE`] posts, newest first, each whole as
-/// HTML with absolute links. Feed readers are not counted as robots here.
-async fn rss(State(app): State<Arc<App>>) -> Response {
+/// HTML with absolute links. One feed per language, by `?l=`, Persian without
+/// one; a post missing that language comes in the other. Feed readers are not
+/// counted as robots here.
+async fn rss(State(app): State<Arc<App>>, Query(query): Query<LanguageQuery>) -> Response {
+    let language = match query.l.as_deref() {
+        Some("en") => "en",
+        _ => "fa",
+    };
     let directory = app.posts.clone();
     let read = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Post>> {
         let ids = post_ids(&directory)?;
@@ -1560,24 +1640,30 @@ async fn rss(State(app): State<Arc<App>>) -> Response {
     escape(CHANNEL_TITLE, &mut xml);
     xml.push_str("</title>\n<description>");
     escape(CHANNEL_DESCRIPTION, &mut xml);
-    xml.push_str("</description>\n<language>fa</language>\n");
-    let _ = writeln!(xml, "<link>{url}/</link>");
+    xml.push_str("</description>\n");
+    let _ = writeln!(xml, "<language>{language}</language>");
+    let _ = writeln!(xml, "<link>{url}/?l={language}</link>");
     let _ = writeln!(
         xml,
-        "<atom:link href=\"{url}/rss.xml\" rel=\"self\" type=\"application/rss+xml\"/>"
+        "<atom:link href=\"{url}/rss.xml?l={language}\" rel=\"self\" type=\"application/rss+xml\"/>"
     );
     let months = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
     for post in posts {
+        let Some((_, version)) = post.pick(language) else {
+            continue;
+        };
         xml.push_str("<item>\n<title>");
-        if post.sentence.is_empty() {
+        if version.sentence.is_empty() {
             escape(&format!("{CHANNEL_TITLE} · {}", post.id), &mut xml);
         } else {
-            escape(&post.sentence, &mut xml);
+            escape(&version.sentence, &mut xml);
         }
         xml.push_str("</title>\n");
-        let _ = writeln!(xml, "<link>{url}/p/{}</link>", post.id);
+        let _ = writeln!(xml, "<link>{url}/p/{}?l={language}</link>", post.id);
+        // Without `?l=`, as before there were feeds per language, so a reader
+        // that has the items already does not show them again.
         let _ = writeln!(xml, "<guid isPermaLink=\"true\">{url}/p/{}</guid>", post.id);
         // RFC 822, from the `YYYY-MM-DDTHH:MM` read_post already checked.
         if let Ok(month) = post.date[5..7].parse::<usize>()
@@ -1594,7 +1680,10 @@ async fn rss(State(app): State<Arc<App>>) -> Response {
             );
         }
         xml.push_str("<description>");
-        escape(&post.html.replace("=\"/", &format!("=\"{url}/")), &mut xml);
+        escape(
+            &version.html.replace("=\"/", &format!("=\"{url}/")),
+            &mut xml,
+        );
         xml.push_str("</description>\n</item>\n");
     }
     xml.push_str("</channel>\n</rss>\n");
@@ -1643,10 +1732,11 @@ async fn access_log(request: Request, next: Next) -> Response {
     response
 }
 
-/// Read and render `<posts>/<id>/post.md`. `None` when the folder or the file
-/// is not there.
+/// Read and render `<posts>/<id>/fa.md` and `<posts>/<id>/en.md`. `None` when
+/// the folder holds neither.
 ///
-/// The file opens with a header and then Markdown:
+/// Each file opens with a header and then Markdown, and when both are there
+/// their dates must agree:
 ///
 /// ```text
 /// ---
@@ -1656,62 +1746,6 @@ async fn access_log(request: Request, next: Next) -> Response {
 /// ![](cat.jpg)
 /// ```
 fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
-    let path = directory.join(id.to_string()).join("post.md");
-    let source = match std::fs::read_to_string(&path) {
-        Ok(source) => source.replace("\r\n", "\n"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error).with_context(|| format!("Could not read {}", path.display()));
-        }
-    };
-    let Some(rest) = source.strip_prefix("---\n") else {
-        bail!(
-            "{} must open with a `---` line, then `date: YYYY-MM-DD HH:MM`, then `---`",
-            path.display()
-        );
-    };
-    let Some((header, body)) = rest.split_once("\n---\n") else {
-        bail!("{} has no `---` line closing its header", path.display());
-    };
-    let mut date = None;
-    for line in header.lines() {
-        if let Some((key, value)) = line.split_once(':')
-            && key.trim() == "date"
-        {
-            date = Some(value.trim());
-        }
-    }
-    let Some(date) = date else {
-        bail!("{} has no `date:` in its header", path.display());
-    };
-    // `YYYY-MM-DD HH:MM`, checked by position rather than parsed into a type:
-    // the front end only ever reads it back as text.
-    let bytes = date.as_bytes();
-    let mut valid = bytes.len() == 16
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && (bytes[10] == b' ' || bytes[10] == b'T')
-        && bytes[13] == b':';
-    for position in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15] {
-        if valid && !bytes[position].is_ascii_digit() {
-            valid = false;
-        }
-    }
-    if valid {
-        let month: u32 = date[5..7].parse()?;
-        let day: u32 = date[8..10].parse()?;
-        let hour: u32 = date[11..13].parse()?;
-        let minute: u32 = date[14..16].parse()?;
-        valid = (1..=12).contains(&month) && (1..=31).contains(&day) && hour < 24 && minute < 60;
-    }
-    if !valid {
-        bail!(
-            "{}: date `{date}` is not `YYYY-MM-DD HH:MM`",
-            path.display()
-        );
-    }
-    let date = format!("{}T{}", &date[..10], &date[11..]);
-
     // A relative link or image points into the post's own folder, which is
     // served at /posts/<id>/. Anything with a scheme, or starting with `/`,
     // `#` or `?`, is left alone.
@@ -1730,88 +1764,6 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
         };
         CowStr::from(format!("/posts/{id}/{url}"))
     };
-
-    // Plain text with a `\n` at every line break and block end, so the first
-    // sentence can stop at the first line.
-    let mut excerpt = String::new();
-    let mut events = Vec::new();
-    let parser = pulldown_cmark::Parser::new_ext(
-        body,
-        Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
-    );
-    for event in parser {
-        let event = match event {
-            // Written like a Telegram message: Enter is a new line.
-            Event::SoftBreak => {
-                excerpt.push('\n');
-                Event::HardBreak
-            }
-            // A block's end is a word boundary in the excerpt too, or two
-            // paragraphs read as one run-on word in a link preview.
-            Event::HardBreak
-            | Event::End(
-                TagEnd::Paragraph
-                | TagEnd::Heading(_)
-                | TagEnd::BlockQuote(_)
-                | TagEnd::CodeBlock
-                | TagEnd::Item
-                | TagEnd::TableCell,
-            ) => {
-                excerpt.push('\n');
-                event
-            }
-            Event::Text(text) => {
-                excerpt.push_str(&text);
-                Event::Text(text)
-            }
-            Event::Code(text) => {
-                excerpt.push_str(&text);
-                Event::Code(text)
-            }
-            Event::Start(Tag::Image {
-                link_type,
-                dest_url,
-                title,
-                id: reference,
-            }) => Event::Start(Tag::Image {
-                link_type,
-                dest_url: local(dest_url.into_static()),
-                title,
-                id: reference,
-            }),
-            Event::Start(Tag::Link {
-                link_type,
-                dest_url,
-                title,
-                id: reference,
-            }) => Event::Start(Tag::Link {
-                link_type,
-                dest_url: local(dest_url.into_static()),
-                title,
-                id: reference,
-            }),
-            other => other,
-        };
-        events.push(event);
-    }
-    let mut html = String::new();
-    pulldown_cmark::html::push_html(&mut html, events.into_iter());
-
-    // The first sentence ends at the first `.`, `!`, `?` or `؟` followed by
-    // a space, or at the first line break, whichever comes first.
-    let excerpt = excerpt.trim_start();
-    let mut split = excerpt.len();
-    let mut previous = None;
-    for (index, character) in excerpt.char_indices() {
-        if character == '\n'
-            || (character.is_whitespace() && matches!(previous, Some('.' | '!' | '?' | '؟')))
-        {
-            split = index;
-            break;
-        }
-        previous = Some(character);
-    }
-    let (sentence, rest) = excerpt.split_at(split);
     // One space between words, cut at `limit` characters with an ellipsis.
     let squeeze = |text: &str, limit: usize| -> String {
         let mut words = String::new();
@@ -1827,14 +1779,187 @@ fn read_post(directory: &FilePath, id: u32) -> anyhow::Result<Option<Post>> {
         }
     };
 
+    // The date and the file it came from, to name both when they disagree.
+    let mut dated: Option<(String, PathBuf)> = None;
+    let mut fa = None;
+    let mut en = None;
+    for language in ["fa", "en"] {
+        let path = directory
+            .join(id.to_string())
+            .join(format!("{language}.md"));
+        let source = match std::fs::read_to_string(&path) {
+            Ok(source) => source.replace("\r\n", "\n"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("Could not read {}", path.display()));
+            }
+        };
+        let Some(rest) = source.strip_prefix("---\n") else {
+            bail!(
+                "{} must open with a `---` line, then `date: YYYY-MM-DD HH:MM`, then `---`",
+                path.display()
+            );
+        };
+        let Some((header, body)) = rest.split_once("\n---\n") else {
+            bail!("{} has no `---` line closing its header", path.display());
+        };
+        let mut date = None;
+        for line in header.lines() {
+            if let Some((key, value)) = line.split_once(':')
+                && key.trim() == "date"
+            {
+                date = Some(value.trim());
+            }
+        }
+        let Some(date) = date else {
+            bail!("{} has no `date:` in its header", path.display());
+        };
+        // `YYYY-MM-DD HH:MM`, checked by position rather than parsed into a
+        // type: the front end only ever reads it back as text.
+        let bytes = date.as_bytes();
+        let mut valid = bytes.len() == 16
+            && bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && (bytes[10] == b' ' || bytes[10] == b'T')
+            && bytes[13] == b':';
+        for position in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15] {
+            if valid && !bytes[position].is_ascii_digit() {
+                valid = false;
+            }
+        }
+        if valid {
+            let month: u32 = date[5..7].parse()?;
+            let day: u32 = date[8..10].parse()?;
+            let hour: u32 = date[11..13].parse()?;
+            let minute: u32 = date[14..16].parse()?;
+            valid =
+                (1..=12).contains(&month) && (1..=31).contains(&day) && hour < 24 && minute < 60;
+        }
+        if !valid {
+            bail!(
+                "{}: date `{date}` is not `YYYY-MM-DD HH:MM`",
+                path.display()
+            );
+        }
+        let date = format!("{}T{}", &date[..10], &date[11..]);
+        match &dated {
+            Some((first, first_path)) if *first != date => {
+                bail!(
+                    "{} is dated {} but {} is dated {}; they must agree",
+                    first_path.display(),
+                    first.replacen('T', " ", 1),
+                    path.display(),
+                    date.replacen('T', " ", 1)
+                );
+            }
+            Some(_) => {}
+            None => dated = Some((date, path)),
+        }
+
+        // Plain text with a `\n` at every line break and block end, so the
+        // first sentence can stop at the first line.
+        let mut excerpt = String::new();
+        let mut events = Vec::new();
+        let parser = pulldown_cmark::Parser::new_ext(
+            body,
+            Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS,
+        );
+        for event in parser {
+            let event = match event {
+                // Written like a Telegram message: Enter is a new line.
+                Event::SoftBreak => {
+                    excerpt.push('\n');
+                    Event::HardBreak
+                }
+                // A block's end is a word boundary in the excerpt too, or two
+                // paragraphs read as one run-on word in a link preview.
+                Event::HardBreak
+                | Event::End(
+                    TagEnd::Paragraph
+                    | TagEnd::Heading(_)
+                    | TagEnd::BlockQuote(_)
+                    | TagEnd::CodeBlock
+                    | TagEnd::Item
+                    | TagEnd::TableCell,
+                ) => {
+                    excerpt.push('\n');
+                    event
+                }
+                Event::Text(text) => {
+                    excerpt.push_str(&text);
+                    Event::Text(text)
+                }
+                Event::Code(text) => {
+                    excerpt.push_str(&text);
+                    Event::Code(text)
+                }
+                Event::Start(Tag::Image {
+                    link_type,
+                    dest_url,
+                    title,
+                    id: reference,
+                }) => Event::Start(Tag::Image {
+                    link_type,
+                    dest_url: local(dest_url.into_static()),
+                    title,
+                    id: reference,
+                }),
+                Event::Start(Tag::Link {
+                    link_type,
+                    dest_url,
+                    title,
+                    id: reference,
+                }) => Event::Start(Tag::Link {
+                    link_type,
+                    dest_url: local(dest_url.into_static()),
+                    title,
+                    id: reference,
+                }),
+                other => other,
+            };
+            events.push(event);
+        }
+        let mut html = String::new();
+        pulldown_cmark::html::push_html(&mut html, events.into_iter());
+
+        // The first sentence ends at the first `.`, `!`, `?` or `؟` followed
+        // by a space, or at the first line break, whichever comes first.
+        let excerpt = excerpt.trim_start();
+        let mut split = excerpt.len();
+        let mut previous = None;
+        for (index, character) in excerpt.char_indices() {
+            if character == '\n'
+                || (character.is_whitespace() && matches!(previous, Some('.' | '!' | '?' | '؟')))
+            {
+                split = index;
+                break;
+            }
+            previous = Some(character);
+        }
+        let (sentence, rest) = excerpt.split_at(split);
+
+        let version = Version {
+            html,
+            sentence: squeeze(sentence, 100),
+            excerpt: squeeze(rest, 200),
+            text: excerpt.to_string(),
+        };
+        if language == "fa" {
+            fa = Some(version);
+        } else {
+            en = Some(version);
+        }
+    }
+
+    let Some((date, _)) = dated else {
+        return Ok(None);
+    };
     Ok(Some(Post {
         id,
         date,
-        html,
+        fa,
+        en,
         views: 0,
-        sentence: squeeze(sentence, 100),
-        excerpt: squeeze(rest, 200),
-        text: excerpt.to_string(),
     }))
 }
 
@@ -1919,8 +2044,8 @@ where
     }
 }
 
-/// The numbers of the folders under `directory` that hold a `post.md`, in
-/// order.
+/// The numbers of the folders under `directory` that hold a `fa.md` or an
+/// `en.md`, in order.
 fn post_ids(directory: &FilePath) -> anyhow::Result<Vec<u32>> {
     let mut ids = Vec::new();
     let entries = std::fs::read_dir(directory)
@@ -1932,7 +2057,7 @@ fn post_ids(directory: &FilePath) -> anyhow::Result<Vec<u32>> {
             continue;
         };
         if let Ok(id) = name.parse::<u32>()
-            && entry.path().join("post.md").is_file()
+            && (entry.path().join("fa.md").is_file() || entry.path().join("en.md").is_file())
         {
             ids.push(id);
         }

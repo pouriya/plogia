@@ -327,6 +327,16 @@ main {
 [dir="rtl"] .meta { justify-content: flex-start; }
 .meta a { color: inherit; text-decoration: none; }
 .meta a:hover { text-decoration: underline; }
+/* FA or EN, on a post not in the page's language. */
+.language {
+  padding: 0 3px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 13px;
+}
+.language[hidden] { display: none; }
 .views { display: inline-flex; align-items: center; gap: 3px; }
 .views svg { width: 16px; height: 16px; fill: currentColor; }
 
@@ -381,6 +391,8 @@ main {
   cursor: pointer;
 }
 .menu button:hover { background: var(--hover); }
+.menu button:disabled { opacity: 0.4; cursor: default; }
+.menu button:disabled:hover { background: none; }
 .menu svg { width: 20px; height: 20px; fill: var(--muted); }
 
 .toast {

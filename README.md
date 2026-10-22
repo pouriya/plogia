@@ -7,9 +7,9 @@
 Posts are folders of Markdown. plogia serves them as a channel feed, counts who read what, and emails each new post to its subscribers. It is one binary and one SQLite file, with no mail relay, no CDN and nothing else to run beside it.
 
 - **Write like Telegram.** Enter is a new line, a blank line is a new paragraph, and Persian and English lines each read the right way.
-- **Readers join three ways:** by email, on the Telegram channel, or with RSS at `/rss.xml`.
+- **Readers join three ways:** by email, on the Telegram channel, or with RSS at `/rss.xml` (Persian) or `/rss.xml?l=en` (English).
 - **Views are real.** A view is a post at least half on screen for two seconds, and robots are counted apart.
-- **English or Persian.** The page is in English, and readers can switch to Persian, right to left with the solar Hijri calendar.
+- **English or Persian.** The page is in English, and readers can switch to Persian, right to left with the solar Hijri calendar. A post can be written in either language or both. Readers see their own language, or the one the post has, and can flip a post to its other version.
 
 ## Run it
 
@@ -33,12 +33,13 @@ plogia speaks plain HTTP. Put it behind nginx, Caddy or a CDN that terminates TL
 
 ## Write a post
 
-One folder per post, named by its number. The number is its order and its link, `/p/12`:
+One folder per post, named by its number. The number is its order and its link, `/p/12`. The text is `fa.md`, `en.md` or both:
 
 ```
 posts/
   12/
-    post.md
+    fa.md
+    en.md
     cat.jpg
 ```
 
@@ -52,7 +53,7 @@ A single Enter is a line break, like in Telegram.
 ![](cat.jpg)
 ```
 
-`date` is your own wall clock, with no zone. A post is live as soon as its folder exists. Subscribers are emailed new posts the next time plogia starts. With Docker, that means building and running a new image.
+`date` is your own wall clock, with no zone. With both files, the dates must match. A post shows in the reader's language, or in the one it has. Links take `?l=fa` or `?l=en` to open in a language, and they open in Persian without it. Subscribers get both versions in one email. A post is live as soon as its folder exists. Subscribers are emailed new posts the next time plogia starts. With Docker, that means building and running a new image.
 
 ## Make it yours
 
