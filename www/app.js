@@ -30,6 +30,7 @@
       channelInfo: 'Channel Info',
       share: 'Share',
       info: 'Info',
+      contact: 'Contact:',
       website: 'Website',
       language: 'Language',
       otherLanguage: 'فارسی',
@@ -66,6 +67,7 @@
       channelInfo: 'اطلاعات کانال',
       share: 'اشتراک‌گذاری',
       info: 'توضیحات',
+      contact: 'راه‌های ارتباطی:',
       website: 'وب‌سایت',
       language: 'زبان',
       otherLanguage: 'English',
@@ -157,6 +159,13 @@
     for (const element of document.querySelectorAll('[data-placeholder]')) {
       element.placeholder = words[element.dataset.placeholder];
     }
+    // The description is the channel's, from the server, in both languages.
+    const description = document.getElementById('info-description');
+    description.textContent = description.dataset[language];
+    // The contact page opens in the same language.
+    const contact = new URL(document.getElementById('info-contact').href);
+    contact.searchParams.set('l', language);
+    document.getElementById('info-contact').href = contact;
     showSubscribers();
     if (postCount !== null) document.getElementById('info-posts').textContent = words.posts(postCount);
     for (const time of list.querySelectorAll('.meta a')) {

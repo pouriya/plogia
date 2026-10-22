@@ -69,9 +69,12 @@ Dockerfile      Pinned rust-alpine builder, pinned alpine runtime
 
 No configuration file and no environment variables. What the channel *is*
 lives as `const`s at the top of `src/main.rs`: `CHANNEL_TITLE` (`Π`, Greek
-capital pi), `CHANNEL_DESCRIPTION`, `CHANNEL_AVATAR`, `CHANNEL_TELEGRAM`
+capital pi), `CHANNEL_DESCRIPTION_FA` (`گفته‌های پوریا`) and
+`CHANNEL_DESCRIPTION_EN` (`Pouriya's Thoughts`), `CHANNEL_CONTACT`
+(`https://pouriya.net/contact`), `CHANNEL_AVATAR`, `CHANNEL_TELEGRAM`
 (`https://t.me/plogia`), `CHANNEL_GITHUB` (`https://github.com/pouriya/plogia`),
-`EMAIL_TITLE` (the subject prefix, `CHANNEL_DESCRIPTION` for now),
+`EMAIL_TITLE` (the subject prefix, both descriptions:
+`گفته‌های پوریا / Pouriya's Thoughts`),
 `EMAIL_USER` (`noreply`), `DKIM_SELECTOR` (`plogia`), `TIMEZONE` (`+03:30`, the
 zone post dates are written in), `PAGE_SIZE` (20), `TEXT_LIMIT`,
 `ROBOT_MARKERS`. What differs per machine comes from the command
@@ -137,13 +140,14 @@ never from request headers.
 **`?l=fa` or `?l=en`** picks the language of a link preview, of the page it
 opens and of the feed; missing or anything else is Persian. A post missing
 that language comes in the other. Every link we hand out carries it: Copy
-Link, Forward, Share, the Website and RSS tiles, a post's time, feed items,
-and emails. A feed item's `guid` is the bare `/p/<n>`, as before there were
-languages.
+Link, Forward, Share, the Website and RSS tiles, the contact link, a post's
+time, feed items, and emails. A feed item's `guid` is the bare `/p/<n>`, as
+before there were languages.
 
 **Link previews** — what Telegram, WhatsApp and X show when someone pastes our
 link. Their bots are counted as robots but still get the page and its tags.
-`/` is `og:type=website` with `CHANNEL_TITLE` and `CHANNEL_DESCRIPTION`. `/p/<n>`
+`/` is `og:type=website` with `CHANNEL_TITLE` and the description in the `?l=`
+language, as is the RSS feed's. `/p/<n>`
 is `og:type=article`, in the `?l=` language: the title is the post's first sentence (up to the first
 `.` `!` `?` `؟` followed by a space, or the first line break; 100 characters at
 most), the description is the 200 characters after it, and
@@ -263,7 +267,11 @@ post. The rest of the page is Vazirmatn.
 - **Channel info**: no intro card in the feed. The header, or a post's avatar,
   opens a Telegram-style panel — beside the feed from 1000px, over it below,
   the whole screen at phone width — with the avatar, title, subscribers, a
-  Share button (the channel link, as Forward), then the description and the
+  Share button (the channel link, as Forward), then, beside an ⓘ with "Info"
+  / «توضیحات» under it, the description in the page's language with a line
+  under it, "Contact:" / «راه‌های ارتباطی:» and
+  `CHANNEL_CONTACT` without its scheme, a link to it with the page's `?l=`
+  opening in a new tab, then the
   post count, then one line of tiles — logo and title, never the address —
   for Website (tap copies the site link), Telegram, RSS (tap copies the feed
   URL) and GitHub, then the language switch. Telegram and GitHub open in a new

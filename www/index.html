@@ -1,8 +1,9 @@
 <!doctype html>
 <!--
   Served for /, /index.html and /p/<n>. The server replaces each {{name}} with
-  HTML-escaped text: channel_title, channel_description, channel_avatar,
-  telegram and github (the channel's links), and,
+  HTML-escaped text: channel_title, channel_description_fa and _en,
+  channel_avatar, telegram, github and contact (the channel's links),
+  contact_text (contact without its scheme), and,
   per page, title, description, type, published, url, locale (link previews;
   no image on purpose), language (fa or en, from ?l=, Persian without it) and
   post (the post number to open at, empty for the newest).
@@ -79,8 +80,14 @@
   </div>
   <div class="info-rows">
     <div class="info-row">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg>
-      <div><p dir="auto">{{channel_description}}</p><span data-text="info">Info</span></div>
+      <div class="info-icon">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg>
+        <span data-text="info">Info</span>
+      </div>
+      <div>
+        <p dir="auto" id="info-description" data-fa="{{channel_description_fa}}" data-en="{{channel_description_en}}"></p>
+        <p><bdi data-text="contact">Contact:</bdi> <a href="{{contact}}?l={{language}}" id="info-contact" target="_blank" rel="noopener noreferrer">{{contact_text}}</a></p>
+      </div>
     </div>
     <div class="info-row">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm0 14H5.2L4 17.2V4h16v12z"/></svg>

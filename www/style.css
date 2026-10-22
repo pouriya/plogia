@@ -568,6 +568,12 @@ button.info-row:hover { background: var(--hover); }
 .info-row div { min-width: 0; }
 .info-row p { margin: 0; white-space: pre-line; overflow-wrap: anywhere; }
 .info-row span { color: var(--muted); font-size: 13px; }
+/* A label under its icon, the column kept as wide as the icon so the text
+   beside it lines up with the other rows. */
+.info-icon { display: flex; flex: none; flex-direction: column; align-items: center; gap: 2px; width: 24px; }
+.info-icon span { font-size: 11px; white-space: nowrap; }
+.info-row a { color: var(--accent); text-decoration: none; }
+.info-row a:hover { text-decoration: underline; }
 
 /* The channel's links as tiles, logo over title, in one line. */
 .cards {
