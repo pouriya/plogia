@@ -337,6 +337,12 @@ main {
   line-height: 13px;
 }
 .language[hidden] { display: none; }
+/* Vazirmatn leaves room under Latin digits for Persian descenders, which lifts
+   them above the eye's middle; trimmed to the glyphs, they center with it. */
+@supports (text-box: trim-both cap alphabetic) {
+  .meta a, .views span, .language { text-box: trim-both cap alphabetic; }
+  .language { padding: 3px; }
+}
 .views { display: inline-flex; align-items: center; gap: 3px; }
 .views svg { width: 16px; height: 16px; fill: currentColor; }
 
