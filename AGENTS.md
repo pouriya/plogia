@@ -56,7 +56,8 @@ www/            The front end, served as-is from --www
   plogia.jpg    Channel avatar and default link-preview image
   favicon.ico   16, 32, 48 px from plogia.jpg
   apple-touch-icon.png   180 px from plogia.jpg
-  fonts/        Vazirmatn Regular, Medium, Bold (woff2) and its OFL license
+  fonts/        Vazirmatn Regular, Medium, Bold and Inconsolata LGC Regular, Bold, Italic,
+                Bold Italic (woff2), each with its OFL license
 posts/          The channel's posts, one folder each
 Makefile        Every build/check entry point. Use it, not cargo.
 README.md       For people running their own: run, write a post, email setup
@@ -242,7 +243,10 @@ key    (name PRIMARY KEY, value)                      -- `dkim`: the signing key
 Client-drawn from the JSON API; the server only fills the template. Newest
 post at the bottom, the page opens there, older posts load as the reader
 scrolls up. Text direction is per block (`dir="auto"`), so Persian and English
-lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN.
+lines each read the right way. Vazirmatn ships in `www/fonts`, no CDN, and so
+does Inconsolata LGC, Inconsolata with Greek and Cyrillic: the text of a post
+shown in English, with Vazirmatn for any Persian in it, and code in every
+post. The rest of the page is Vazirmatn.
 
 - **Post languages**: `/api/posts` sends every version, so a post shows in the
   page's language, or in its other one when it lacks it, with a small `FA` or

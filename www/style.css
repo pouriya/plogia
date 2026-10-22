@@ -19,6 +19,34 @@
   font-weight: 700;
   font-display: swap;
 }
+@font-face {
+  font-family: "Inconsolata LGC";
+  src: url("/fonts/InconsolataLGC-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inconsolata LGC";
+  src: url("/fonts/InconsolataLGC-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inconsolata LGC";
+  src: url("/fonts/InconsolataLGC-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inconsolata LGC";
+  src: url("/fonts/InconsolataLGC-BoldItalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
 
 :root {
   color-scheme: light dark;
@@ -272,6 +300,9 @@ main {
   font-weight: 700;
 }
 
+/* An English post reads in Inconsolata LGC, Greek included; Persian words
+   inside it fall through to Vazirmatn. */
+.post[data-language="en"] .text { font-family: "Inconsolata LGC", "Vazirmatn", monospace; }
 .text > :first-child { margin-top: 0; }
 .text > :last-child { margin-bottom: 0; }
 .text p { margin: 0 0 0.6em; }
@@ -290,7 +321,7 @@ main {
   padding: 1px 4px;
   border-radius: 4px;
   background: var(--code);
-  font: 0.9em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font: 0.9em/1.4 "Inconsolata LGC", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .text pre {
   margin: 0.3em 0;
