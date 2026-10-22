@@ -34,13 +34,16 @@
 <div class="wallpaper" aria-hidden="true"></div>
 
 <header class="top">
-  <button class="channel" id="channel" type="button" aria-label="Channel Info" data-label="channelInfo">
-    <img class="avatar" src="{{channel_avatar}}" alt="">
-    <span class="channel-text">
-      <span class="channel-title" dir="auto">{{channel_title}}</span>
-      <span class="channel-sub subscriber-count">&nbsp;</span>
-    </span>
-  </button>
+  <div class="top-bar">
+    <button class="channel" id="channel" type="button" aria-label="Channel Info" data-label="channelInfo">
+      <img class="avatar" src="{{channel_avatar}}" alt="">
+      <span class="channel-text">
+        <span class="channel-title" dir="auto">{{channel_title}}</span>
+        <span class="channel-sub subscriber-count">&nbsp;</span>
+      </span>
+    </button>
+    <button class="top-language" id="top-language" type="button" lang="fa" data-text="otherLanguage">فارسی</button>
+  </div>
 </header>
 
 <main id="feed" data-post="{{post}}" data-channel="{{channel_title}}" data-avatar="{{channel_avatar}}">

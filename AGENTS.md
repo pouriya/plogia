@@ -275,10 +275,13 @@ post. The rest of the page is Vazirmatn.
   shows a toast ("You're in. Check your inbox." / «به کانال پیوستید؛ ایمیلتان
   را ببینید.»), closes the panel and sets `plogia.joined` in `localStorage`;
   the bar is never shown again in that browser.
-- **Language**: English by default; Persian only when the reader turns on the
-  فارسی switch in the channel info, kept in `localStorage` (`plogia.language`).
-  A link's `?l=` wins for that page load and is not saved; the switch rewrites
-  it in the address so a reload keeps the choice.
+- **Language**: Persian by default, as on the server; English when the reader
+  switches, kept in `localStorage` (`plogia.language`). Two controls switch:
+  the فارسی switch in the channel info, and a button at the far end of the
+  header (top right in English, top left in Persian) naming the other
+  language in itself, "English" or «فارسی». A link's `?l=` wins for that page
+  load and is not saved; switching rewrites it in the address so a reload
+  keeps the choice.
   The browser's languages are not consulted. It switches in place, no reload.
   Subscribers are "عضو" in Persian, to match پیوستن and عضویت. Persian turns
   the whole layout right to left, keeps Latin digits, and dates day pills and

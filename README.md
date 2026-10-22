@@ -9,7 +9,7 @@ Posts are folders of Markdown. plogia serves them as a channel feed, counts who 
 - **Write like Telegram.** Enter is a new line, a blank line is a new paragraph, and Persian and English lines each read the right way.
 - **Readers join three ways:** by email, on the Telegram channel, or with RSS at `/rss.xml` (Persian) or `/rss.xml?l=en` (English).
 - **Views are real.** A view is a post at least half on screen for two seconds, and robots are counted apart.
-- **English or Persian.** The page is in English, and readers can switch to Persian, right to left with the solar Hijri calendar. A post can be written in either language or both. Readers see their own language, or the one the post has, and can flip a post to its other version.
+- **Persian or English.** The page is in Persian, right to left with the solar Hijri calendar, and readers can switch to English from the header. A post can be written in either language or both. Readers see their own language, or the one the post has, and can flip a post to its other version.
 
 ## Run it
 

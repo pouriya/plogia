@@ -32,6 +32,7 @@
       info: 'Info',
       website: 'Website',
       language: 'Language',
+      otherLanguage: 'فارسی',
       telegram: 'Telegram',
       github: 'GitHub',
       rss: 'RSS',
@@ -67,6 +68,7 @@
       info: 'توضیحات',
       website: 'وب‌سایت',
       language: 'زبان',
+      otherLanguage: 'English',
       telegram: 'تلگرام',
       github: 'گیت‌هاب',
       rss: 'RSS',
@@ -124,11 +126,11 @@
 
   // ---- Language -----------------------------------------------------------
 
-  // English, unless the reader has turned Persian on. A link's ?l= wins for
+  // Persian, unless the reader has switched to English. A link's ?l= wins for
   // this page load and is not saved.
-  let language = 'en';
+  let language = 'fa';
   try {
-    if (localStorage.getItem(LANGUAGE_KEY) === 'fa') language = 'fa';
+    if (localStorage.getItem(LANGUAGE_KEY) === 'en') language = 'en';
   } catch (_) { /* storage blocked */ }
   const linked = new URLSearchParams(location.search).get('l');
   if (linked === 'en' || linked === 'fa') language = linked;
@@ -144,6 +146,8 @@
     document.documentElement.lang = language;
     document.documentElement.dir = language === 'fa' ? 'rtl' : 'ltr';
     document.getElementById('info-language').ariaChecked = String(language === 'fa');
+    // It names the language it switches to, in that language.
+    document.getElementById('top-language').lang = language === 'fa' ? 'en' : 'fa';
     for (const element of document.querySelectorAll('[data-text]')) {
       element.textContent = words[element.dataset.text];
     }
@@ -182,7 +186,8 @@
     }
   }
 
-  document.getElementById('info-language').addEventListener('click', () => {
+  // The switch in the channel info and the button in the header.
+  function switchLanguage() {
     language = language === 'en' ? 'fa' : 'en';
     try { localStorage.setItem(LANGUAGE_KEY, language); } catch (_) { /* storage blocked */ }
     // A ?l= in the address would undo the switch on reload.
@@ -192,7 +197,9 @@
       history.replaceState(history.state, '', address);
     }
     applyLanguage();
-  });
+  }
+  document.getElementById('info-language').addEventListener('click', switchLanguage);
+  document.getElementById('top-language').addEventListener('click', switchLanguage);
   applyLanguage();
 
   // ---- Handshake ----------------------------------------------------------
