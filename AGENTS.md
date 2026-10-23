@@ -69,12 +69,12 @@ Dockerfile      Pinned rust-alpine builder, pinned alpine runtime
 
 No configuration file and no environment variables. What the channel *is*
 lives as `const`s at the top of `src/main.rs`: `CHANNEL_TITLE` (`Π`, Greek
-capital pi), `CHANNEL_DESCRIPTION_FA` (`گفته‌های پوریا`) and
-`CHANNEL_DESCRIPTION_EN` (`Pouriya's Thoughts`), `CHANNEL_CONTACT`
+capital pi), `CHANNEL_DESCRIPTION_FA` (`پاره‌سخن‌های پوریا`) and
+`CHANNEL_DESCRIPTION_EN` (`Pouriya's Fragments`), `CHANNEL_CONTACT`
 (`https://pouriya.net/contact`), `CHANNEL_AVATAR`, `CHANNEL_TELEGRAM`
 (`https://t.me/plogia`), `CHANNEL_GITHUB` (`https://github.com/pouriya/plogia`),
 `EMAIL_TITLE` (the subject prefix, both descriptions:
-`گفته‌های پوریا / Pouriya's Thoughts`),
+`پاره‌سخن‌های پوریا / Pouriya's Fragments`),
 `EMAIL_USER` (`noreply`), `DKIM_SELECTOR` (`plogia`), `TIMEZONE` (`+03:30`, the
 zone post dates are written in), `PAGE_SIZE` (20), `TEXT_LIMIT`,
 `ROBOT_MARKERS`. What differs per machine comes from the command
@@ -146,8 +146,9 @@ before there were languages.
 
 **Link previews** — what Telegram, WhatsApp and X show when someone pastes our
 link. Their bots are counted as robots but still get the page and its tags.
-`/` is `og:type=website` with `CHANNEL_TITLE` and the description in the `?l=`
-language, as is the RSS feed's. `/p/<n>`
+`/` is `og:type=website` whose title and description are both the description
+in the `?l=` language, as are the RSS feed's; switching language in place
+retitles the tab. `CHANNEL_TITLE` is `og:site_name`. `/p/<n>`
 is `og:type=article`, in the `?l=` language: the title is the post's first sentence (up to the first
 `.` `!` `?` `؟` followed by a space, or the first line break; 100 characters at
 most), the description is the 200 characters after it, and

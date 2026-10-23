@@ -162,6 +162,8 @@
     // The description is the channel's, from the server, in both languages.
     const description = document.getElementById('info-description');
     description.textContent = description.dataset[language];
+    // It is the channel's title too, except on a post's page.
+    if (focus === null) document.title = description.dataset[language];
     // The contact page opens in the same language.
     const contact = new URL(document.getElementById('info-contact').href);
     contact.searchParams.set('l', language);

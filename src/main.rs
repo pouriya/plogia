@@ -61,8 +61,8 @@ const CHANNEL_TITLE: &str = "Π";
 
 /// In the channel info, the description of a link to the channel itself and
 /// the RSS feed's, in Persian and in English.
-const CHANNEL_DESCRIPTION_FA: &str = "گفته‌های پوریا";
-const CHANNEL_DESCRIPTION_EN: &str = "Pouriya's Thoughts";
+const CHANNEL_DESCRIPTION_FA: &str = "پاره‌سخن‌های پوریا";
+const CHANNEL_DESCRIPTION_EN: &str = "Pouriya's Fragments";
 
 /// How to reach the author, under the description in the channel info.
 const CHANNEL_CONTACT: &str = "https://pouriya.net/contact";
@@ -81,7 +81,7 @@ const CHANNEL_GITHUB: &str = "https://github.com/pouriya/plogia";
 /// Every post email's subject opens with this, then ` · ` and the post's first
 /// sentence, so a subscriber finds them all with one search. Both
 /// descriptions, as every email carries both languages.
-const EMAIL_TITLE: &str = "گفته‌های پوریا / Pouriya's Thoughts";
+const EMAIL_TITLE: &str = "پاره‌سخن‌های پوریا / Pouriya's Fragments";
 
 /// Post emails come from `CHANNEL_TITLE <EMAIL_USER@host of --url>`.
 const EMAIL_USER: &str = "noreply";
@@ -981,11 +981,11 @@ async fn page(
         Some("en") => "en",
         _ => "fa",
     };
-    let mut title = CHANNEL_TITLE.to_string();
     let mut description = match language {
         "en" => CHANNEL_DESCRIPTION_EN.to_string(),
         _ => CHANNEL_DESCRIPTION_FA.to_string(),
     };
+    let mut title = description.clone();
     let mut kind = "website";
     let mut published = String::new();
     let mut focus = String::new();
@@ -1652,15 +1652,14 @@ async fn rss(State(app): State<Arc<App>>, Query(query): Query<LanguageQuery>) ->
     xml.push_str(
         "<rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\">\n<channel>\n<title>",
     );
-    escape(CHANNEL_TITLE, &mut xml);
+    // The description is the feed's title too.
+    let description = match language {
+        "en" => CHANNEL_DESCRIPTION_EN,
+        _ => CHANNEL_DESCRIPTION_FA,
+    };
+    escape(description, &mut xml);
     xml.push_str("</title>\n<description>");
-    escape(
-        match language {
-            "en" => CHANNEL_DESCRIPTION_EN,
-            _ => CHANNEL_DESCRIPTION_FA,
-        },
-        &mut xml,
-    );
+    escape(description, &mut xml);
     xml.push_str("</description>\n");
     let _ = writeln!(xml, "<language>{language}</language>");
     let _ = writeln!(xml, "<link>{url}/?l={language}</link>");
